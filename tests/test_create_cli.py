@@ -42,12 +42,33 @@ def make_source(tmp_path: Path, domain: str) -> Path:
     return source
 
 
-def test_create_site_plan_mode(tmp_path: Path) -> None:
+def test_create_site_requires_apply(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     source = make_source(tmp_path, "demo.test")
     result = runner.invoke(
         app,
         ["--config", str(config), "create", "site", "demo.test", "--source", str(source)],
+    )
+    assert result.exit_code == 2
+    assert "create site requires --apply" in result.stdout
+
+
+def test_create_site_dry_run_still_plan_mode(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "demo.test")
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--dry-run",
+            "create",
+            "site",
+            "demo.test",
+            "--source",
+            str(source),
+            "--apply",
+        ],
     )
     assert result.exit_code == 0
     assert "Create site plan prepared for demo.test" in result.stdout
@@ -122,7 +143,7 @@ def test_create_site_runtime_requires_deploy(tmp_path: Path) -> None:
     assert "Runtime enable requires --deploy" in result.stdout
 
 
-def test_create_site_le_plan_mode(tmp_path: Path) -> None:
+def test_create_site_le_requires_apply(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     _ = make_source(tmp_path, "demo.test")
     result = runner.invoke(
@@ -136,8 +157,8 @@ def test_create_site_le_plan_mode(tmp_path: Path) -> None:
             "-le",
         ],
     )
-    assert result.exit_code == 0
-    assert "Create site plan prepared for demo.test" in result.stdout
+    assert result.exit_code == 2
+    assert "create site requires --apply" in result.stdout
 
 
 def test_create_site_le_requires_deploy(tmp_path: Path) -> None:

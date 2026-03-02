@@ -42,6 +42,8 @@ larops create site example.com --apply
 larops create site example.com -le --apply
 ```
 
+`create site` yêu cầu `--apply` để chạy thật.
+
 ## Quick Start
 
 ```bash

@@ -155,9 +155,12 @@ def create_site(
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
-    if app_ctx.dry_run or not apply:
+    if app_ctx.dry_run:
         app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
         return
+    if not apply:
+        app_ctx.emit_output("error", "create site requires --apply")
+        raise typer.Exit(code=2)
 
     _emit(
         app_ctx,
