@@ -159,8 +159,8 @@ def create_site(
         app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
         return
     if not apply:
-        app_ctx.emit_output("error", "create site requires --apply")
-        raise typer.Exit(code=2)
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
 
     _emit(
         app_ctx,
