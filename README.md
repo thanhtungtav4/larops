@@ -38,7 +38,7 @@ larops bootstrap init --domain example.com --source /var/www/source --apply
 WordOps-style short create:
 
 ```bash
-larops create site example.com --source /var/www/source --apply
+larops create site example.com --apply
 ```
 
 ## Quick Start
@@ -59,6 +59,7 @@ environment: test
 state_path: /tmp/larops-state
 deploy:
   releases_path: /tmp/larops-apps
+  source_base_path: /tmp/larops-source
   keep_releases: 3
   health_check_path: /up
 events:
@@ -91,7 +92,9 @@ larops --config /tmp/larops.yaml horizon enable demo.test --apply
 larops --config /tmp/larops.yaml --json worker status demo.test
 
 # WordOps-style one command for create + deploy (+ optional runtime)
-larops --config /tmp/larops.yaml create site demo.test --source . --worker --scheduler --apply
+mkdir -p /tmp/larops-source/demo.test
+cp -R . /tmp/larops-source/demo.test
+larops --config /tmp/larops.yaml create site demo.test --worker --scheduler --apply
 
 # SSL lifecycle
 larops --config /tmp/larops.yaml ssl issue demo.test --challenge http

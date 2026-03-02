@@ -53,10 +53,10 @@ def _emit(
 def create_site(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Site domain."),
-    source: Path = typer.Option(
-        Path("."),
+    source: Path | None = typer.Option(
+        None,
         "--source",
-        help="Laravel source directory to deploy.",
+        help="Laravel source directory to deploy (default: deploy.source_base_path/<domain>).",
         exists=False,
         file_okay=False,
     ),
@@ -88,7 +88,11 @@ def create_site(
         )
         raise typer.Exit(code=2)
 
-    source_path = source.resolve()
+    source_path = (
+        source.resolve()
+        if source is not None
+        else (Path(app_ctx.config.deploy.source_base_path) / domain).resolve()
+    )
     paths = get_app_paths(
         Path(app_ctx.config.deploy.releases_path),
         Path(app_ctx.config.state_path),

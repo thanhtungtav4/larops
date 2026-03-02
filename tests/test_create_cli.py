@@ -9,6 +9,7 @@ runner = CliRunner()
 
 
 def write_config(tmp_path: Path) -> Path:
+    source_base = tmp_path / "sources"
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(
         "\n".join(
@@ -17,6 +18,7 @@ def write_config(tmp_path: Path) -> Path:
                 f"state_path: {tmp_path / 'state'}",
                 "deploy:",
                 f"  releases_path: {tmp_path / 'apps'}",
+                f"  source_base_path: {source_base}",
                 "  keep_releases: 5",
                 "  health_check_path: /up",
                 "systemd:",
@@ -33,8 +35,8 @@ def write_config(tmp_path: Path) -> Path:
     return config_file
 
 
-def make_source(tmp_path: Path) -> Path:
-    source = tmp_path / "source"
+def make_source(tmp_path: Path, domain: str) -> Path:
+    source = tmp_path / "sources" / domain
     source.mkdir(parents=True, exist_ok=True)
     (source / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
     return source
@@ -42,7 +44,7 @@ def make_source(tmp_path: Path) -> Path:
 
 def test_create_site_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
-    source = make_source(tmp_path)
+    source = make_source(tmp_path, "demo.test")
     result = runner.invoke(
         app,
         ["--config", str(config), "create", "site", "demo.test", "--source", str(source)],
@@ -53,7 +55,7 @@ def test_create_site_plan_mode(tmp_path: Path) -> None:
 
 def test_create_site_apply_creates_and_deploys(tmp_path: Path) -> None:
     config = write_config(tmp_path)
-    source = make_source(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
     result = runner.invoke(
         app,
         [
@@ -62,8 +64,6 @@ def test_create_site_apply_creates_and_deploys(tmp_path: Path) -> None:
             "create",
             "site",
             "demo.test",
-            "--source",
-            str(source),
             "--apply",
         ],
     )
@@ -79,7 +79,7 @@ def test_create_site_apply_creates_and_deploys(tmp_path: Path) -> None:
 
 def test_create_site_apply_with_runtime_flags(tmp_path: Path) -> None:
     config = write_config(tmp_path)
-    source = make_source(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
     result = runner.invoke(
         app,
         [
@@ -88,8 +88,6 @@ def test_create_site_apply_with_runtime_flags(tmp_path: Path) -> None:
             "create",
             "site",
             "demo.test",
-            "--source",
-            str(source),
             "--worker",
             "--scheduler",
             "--apply",

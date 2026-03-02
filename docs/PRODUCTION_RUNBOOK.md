@@ -22,6 +22,7 @@ environment: production
 state_path: /var/lib/larops/state
 deploy:
   releases_path: /var/www
+  source_base_path: /var/www/source
   keep_releases: 5
   health_check_path: /up
 systemd:
@@ -78,7 +79,7 @@ sudo larops --config /etc/larops/larops.yaml app deploy example.com --source /va
 Or short command (create + deploy):
 
 ```bash
-sudo larops --config /etc/larops/larops.yaml create site example.com --source /var/www/source --apply
+sudo larops --config /etc/larops/larops.yaml create site example.com --apply
 ```
 
 Enable runtime:

@@ -31,6 +31,7 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
         "state_path": app_ctx.config.state_path,
         "deploy": {
             "releases_path": app_ctx.config.deploy.releases_path,
+            "source_base_path": app_ctx.config.deploy.source_base_path,
             "keep_releases": app_ctx.config.deploy.keep_releases,
             "health_check_path": app_ctx.config.deploy.health_check_path,
         },

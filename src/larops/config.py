@@ -9,6 +9,7 @@ DEFAULT_CONFIG_PATH = Path("/etc/larops/larops.yaml")
 
 class DeployConfig(BaseModel):
     releases_path: str = "/var/www"
+    source_base_path: str = "/var/www/source"
     keep_releases: int = 5
     health_check_path: str = "/up"
 

@@ -3,6 +3,7 @@ state_path: .larops/state
 
 deploy:
   releases_path: /var/www
+  source_base_path: /var/www/source
   keep_releases: 5
   health_check_path: /up
 
