@@ -66,14 +66,14 @@ def create_site(
         exists=False,
         file_okay=False,
     ),
-    ref: str = typer.Option("main", "--ref", help="Source ref metadata."),
+    ref: str = typer.Option("main", "--ref", "-r", help="Source ref metadata."),
     deploy: bool = typer.Option(True, "--deploy/--no-deploy", help="Deploy source after create."),
-    worker: bool = typer.Option(False, "--worker/--no-worker", help="Enable queue worker."),
-    scheduler: bool = typer.Option(False, "--scheduler/--no-scheduler", help="Enable scheduler."),
+    worker: bool = typer.Option(False, "--worker/--no-worker", "-w", help="Enable queue worker."),
+    scheduler: bool = typer.Option(False, "--scheduler/--no-scheduler", "-s", help="Enable scheduler."),
     horizon: bool = typer.Option(False, "--horizon/--no-horizon", help="Enable horizon."),
-    queue: str = typer.Option("default", "--queue", help="Worker queue."),
-    concurrency: int = typer.Option(1, "--concurrency", help="Worker concurrency."),
-    tries: int = typer.Option(3, "--tries", help="Worker tries."),
+    queue: str = typer.Option("default", "--queue", "-q", help="Worker queue."),
+    concurrency: int = typer.Option(1, "--concurrency", "-c", help="Worker concurrency."),
+    tries: int = typer.Option(3, "--tries", "-t", help="Worker tries."),
     timeout: int = typer.Option(90, "--timeout", help="Worker timeout in seconds."),
     schedule_command: str = typer.Option(
         "php artisan schedule:run",
@@ -94,7 +94,7 @@ def create_site(
     le_dns_provider: str | None = typer.Option(None, "--le-dns-provider", help="DNS provider for dns challenge."),
     le_staging: bool = typer.Option(False, "--le-staging", help="Use Let's Encrypt staging environment."),
     force: bool = typer.Option(False, "--force", help="Overwrite existing app metadata."),
-    apply: bool = typer.Option(False, "--apply", help="Apply create site workflow."),
+    apply: bool = typer.Option(False, "--apply", "-a", help="Apply create site workflow."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
     if not deploy and (worker or scheduler or horizon):

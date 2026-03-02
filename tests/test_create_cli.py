@@ -54,6 +54,17 @@ def test_create_site_plan_mode(tmp_path: Path) -> None:
     assert "Plan mode finished. Use --apply to execute changes." in result.stdout
 
 
+def test_site_alias_plan_mode(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "demo.test")
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "site", "demo.test", "--source", str(source)],
+    )
+    assert result.exit_code == 0
+    assert "Create site plan prepared for demo.test" in result.stdout
+
+
 def test_create_site_dry_run_still_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     source = make_source(tmp_path, "demo.test")
@@ -97,6 +108,23 @@ def test_create_site_apply_creates_and_deploys(tmp_path: Path) -> None:
     payload = json.loads(info.stdout.strip())
     assert payload["current_release"] is not None
     assert payload["releases_count"] == 1
+
+
+def test_site_alias_apply_short_flag(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "site",
+            "demo.test",
+            "-a",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Create site completed for demo.test" in result.stdout
 
 
 def test_create_site_apply_with_runtime_flags(tmp_path: Path) -> None:
