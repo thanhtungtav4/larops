@@ -2,37 +2,12 @@ import typer
 import socket
 
 from larops.core.locks import CommandLock, CommandLockError
-from larops.core.shell import ShellCommandError, run_command
+from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.stack_service import apply_stack_plan, build_stack_plan, resolve_groups
 
 stack_app = typer.Typer(help="Manage host stack components.")
-
-PACKAGE_GROUPS = {
-    "web": [
-        "nginx",
-        "php8.3-fpm",
-        "php8.3-cli",
-        "php8.3-mbstring",
-        "php8.3-xml",
-        "php8.3-curl",
-        "php8.3-zip",
-    ],
-    "data": ["mariadb-server", "redis-server"],
-    "ops": ["supervisor", "fail2ban", "ufw"],
-}
-
-
-def resolve_groups(web: bool, data: bool, ops: bool) -> list[str]:
-    return [name for name, enabled in {"web": web, "data": data, "ops": ops}.items() if enabled]
-
-
-def build_install_commands(groups: list[str]) -> list[list[str]]:
-    packages: list[str] = []
-    for group in groups:
-        packages.extend(PACKAGE_GROUPS[group])
-    dedup_packages = sorted(set(packages))
-    return [["apt-get", "update"], ["apt-get", "install", "-y", *dedup_packages]]
 
 
 @stack_app.command("install")
@@ -54,7 +29,7 @@ def install(
         app_ctx.emit_output("error", "No stack group selected. Use --web, --data, or --ops.")
         raise typer.Exit(code=2)
 
-    planned_commands = build_install_commands(requested)
+    plan = build_stack_plan(requested)
     app_ctx.event_emitter.emit(
         EventRecord(
             severity="info",
@@ -69,7 +44,7 @@ def install(
         "ok",
         f"Stack plan prepared for groups: {', '.join(requested)}",
         groups=requested,
-        commands=planned_commands,
+        commands=plan.commands,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -80,8 +55,8 @@ def install(
 
     try:
         with CommandLock("stack-install"):
-            for command in planned_commands:
-                run_command(command, check=True)
+            apply_stack_plan(plan)
+            for command in plan.commands:
                 app_ctx.emit_output("ok", f"Executed: {' '.join(command)}")
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))

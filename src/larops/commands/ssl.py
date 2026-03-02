@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import socket
+from pathlib import Path
+
+import typer
+
+from larops.core.locks import CommandLock, CommandLockError
+from larops.core.shell import ShellCommandError
+from larops.models import EventRecord
+from larops.runtime import AppContext
+from larops.services.ssl_service import (
+    SslServiceError,
+    build_issue_command,
+    build_renew_command,
+    default_cert_file,
+    read_certificate_info,
+    run_issue,
+    run_renew,
+)
+
+ssl_app = typer.Typer(help="Manage SSL certificate lifecycle.")
+
+
+def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, metadata: dict | None = None) -> None:
+    app_ctx.event_emitter.emit(
+        EventRecord(
+            severity=severity,
+            event_type=event_type,
+            host=socket.gethostname(),
+            message=message,
+            metadata=metadata or {},
+        )
+    )
+
+
+@ssl_app.command("issue")
+def issue(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Domain for certificate issuance."),
+    email: str | None = typer.Option(None, "--email", help="Email used for certificate registration."),
+    challenge: str = typer.Option("http", "--challenge", help="Challenge type: http or dns."),
+    dns_provider: str | None = typer.Option(None, "--dns-provider", help="DNS provider short name for certbot."),
+    staging: bool = typer.Option(False, "--staging", help="Use Let's Encrypt staging."),
+    apply: bool = typer.Option(False, "--apply", help="Apply certificate issuance."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        command = build_issue_command(
+            domain=domain,
+            email=email,
+            challenge=challenge,
+            dns_provider=dns_provider,
+            staging=staging,
+        )
+    except SslServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    app_ctx.emit_output(
+        "ok",
+        f"SSL issue plan prepared for {domain}",
+        domain=domain,
+        command=command,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock("ssl-issue"):
+            output = run_issue(command)
+    except (CommandLockError, ShellCommandError, SslServiceError) as exc:
+        _emit(app_ctx, "error", "ssl.issue.failed", "SSL issue failed.", {"error": str(exc), "domain": domain})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(app_ctx, "info", "ssl.issue.completed", "SSL issue completed.", {"domain": domain})
+    app_ctx.emit_output("ok", f"SSL issue completed for {domain}", output=output)
+
+
+@ssl_app.command("renew")
+def renew(
+    ctx: typer.Context,
+    force: bool = typer.Option(False, "--force", help="Force certificate renewal."),
+    dry_run_renew: bool = typer.Option(False, "--dry-run-renew", help="Pass certbot dry-run flag."),
+    apply: bool = typer.Option(False, "--apply", help="Apply renewal."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    command = build_renew_command(force=force, dry_run=dry_run_renew)
+    app_ctx.emit_output(
+        "ok",
+        "SSL renew plan prepared.",
+        command=command,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock("ssl-renew"):
+            output = run_renew(command)
+    except (CommandLockError, ShellCommandError, SslServiceError) as exc:
+        _emit(app_ctx, "error", "ssl.renew.failed", "SSL renew failed.", {"error": str(exc)})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(app_ctx, "info", "ssl.renew.completed", "SSL renew completed.")
+    app_ctx.emit_output("ok", "SSL renew completed.", output=output)
+
+
+@ssl_app.command("check")
+def check(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Domain to check."),
+    cert_file: Path | None = typer.Option(
+        None,
+        "--cert-file",
+        help="Optional cert file override for checks.",
+        exists=False,
+        dir_okay=False,
+    ),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    file_path = cert_file or default_cert_file(domain)
+
+    try:
+        info = read_certificate_info(file_path)
+    except (SslServiceError, ShellCommandError) as exc:
+        app_ctx.emit_output("error", str(exc), domain=domain, cert_file=str(file_path))
+        raise typer.Exit(code=2) from exc
+
+    status = "ok" if info.days_remaining >= 15 else "warn"
+    app_ctx.emit_output(
+        status,
+        f"SSL certificate status for {domain}",
+        domain=domain,
+        cert_file=str(info.cert_file),
+        subject=info.subject,
+        issuer=info.issuer,
+        not_after=info.not_after.isoformat(),
+        days_remaining=info.days_remaining,
+    )
+

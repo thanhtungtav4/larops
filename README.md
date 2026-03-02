@@ -13,7 +13,20 @@ LarOps standardizes Laravel infrastructure operations:
 
 ## Current Stage
 
-S4 foundation: runtime context, stack planner, app lifecycle, and process commands (`worker`, `scheduler`, `horizon`).
+S5 foundation: WordOps-style bootstrap flow, app lifecycle, runtime process controls, SSL lifecycle, DB backup/restore, and doctor checks.
+
+## Empty Server One-Liner
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | sudo bash
+larops bootstrap init --apply
+```
+
+Optional app bootstrap in one go:
+
+```bash
+larops bootstrap init --domain example.com --source /var/www/source --apply
+```
 
 ## Quick Start
 
@@ -49,6 +62,9 @@ larops --config /tmp/larops.yaml worker enable demo.test --queue default --concu
 larops --config /tmp/larops.yaml scheduler enable demo.test --apply
 larops --config /tmp/larops.yaml horizon enable demo.test --apply
 larops --config /tmp/larops.yaml --json worker status demo.test
+larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
+larops --config /tmp/larops.yaml db list-backups demo.test
+larops --config /tmp/larops.yaml --json doctor run demo.test
 ```
 
 ## Docker Test
@@ -59,8 +75,7 @@ docker compose run --rm larops-test
 docker compose run --rm larops-cli
 ```
 
-## Roadmap
+## Installer Script
 
-1. S1: extraction report and reusable provisioning patterns
-2. S2: core command framework and lock manager
-3. S3+: deploy lifecycle, runtime controls, observability, notifications
+Direct install script is in `scripts/install.sh`.  
+It installs dependencies, clones/updates source, installs LarOps into a venv, links `/usr/local/bin/larops`, and seeds `/etc/larops/larops.yaml`.
