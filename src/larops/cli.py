@@ -5,16 +5,17 @@ import typer
 from larops import __version__
 from larops.commands.app import app_cmd
 from larops.commands.bootstrap import bootstrap_app
-from larops.commands.create import create_app, create_site
+from larops.commands.create import create_app
 from larops.commands.db import db_app
 from larops.commands.doctor import doctor_app
 from larops.commands.horizon import horizon_app
 from larops.commands.notify import notify_app
 from larops.commands.scheduler import scheduler_app
+from larops.commands.site import site_app
 from larops.commands.ssl import ssl_app
 from larops.commands.stack import stack_app
 from larops.commands.worker import worker_app
-from larops.config import load_config
+from larops.config import ConfigError, load_config
 from larops.runtime import AppContext
 
 app = typer.Typer(help="LarOps: Laravel-first server operations CLI.")
@@ -49,7 +50,11 @@ def main(
     verbose: bool = typer.Option(False, "--verbose", help="Enable verbose logs."),
 ) -> None:
     _ = version
-    loaded = load_config(config)
+    try:
+        loaded = load_config(config)
+    except ConfigError as exc:
+        typer.echo(f"Config error: {exc}")
+        raise typer.Exit(code=2) from exc
     ctx.obj = AppContext.from_config(
         loaded,
         config_path=config,
@@ -61,7 +66,7 @@ def main(
 
 app.add_typer(stack_app, name="stack")
 app.add_typer(create_app, name="create")
-app.command("site", help="Shortcut for `create site`.")(create_site)
+app.add_typer(site_app, name="site")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(app_cmd, name="app")
 app.add_typer(worker_app, name="worker")

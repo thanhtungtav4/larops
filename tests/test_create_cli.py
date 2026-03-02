@@ -4,6 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.services.ssl_service import SslServiceError
 
 runner = CliRunner()
 
@@ -54,12 +55,12 @@ def test_create_site_plan_mode(tmp_path: Path) -> None:
     assert "Plan mode finished. Use --apply to execute changes." in result.stdout
 
 
-def test_site_alias_plan_mode(tmp_path: Path) -> None:
+def test_site_create_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     source = make_source(tmp_path, "demo.test")
     result = runner.invoke(
         app,
-        ["--config", str(config), "site", "demo.test", "--source", str(source)],
+        ["--config", str(config), "site", "create", "demo.test", "--source", str(source)],
     )
     assert result.exit_code == 0
     assert "Create site plan prepared for demo.test" in result.stdout
@@ -110,7 +111,7 @@ def test_create_site_apply_creates_and_deploys(tmp_path: Path) -> None:
     assert payload["releases_count"] == 1
 
 
-def test_site_alias_apply_short_flag(tmp_path: Path) -> None:
+def test_site_create_apply_short_flag(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     _ = make_source(tmp_path, "demo.test")
     result = runner.invoke(
@@ -119,6 +120,7 @@ def test_site_alias_apply_short_flag(tmp_path: Path) -> None:
             "--config",
             str(config),
             "site",
+            "create",
             "demo.test",
             "-a",
         ],
@@ -162,6 +164,7 @@ def test_site_mode_disable_apply(tmp_path: Path) -> None:
             "--config",
             str(config),
             "site",
+            "create",
             "demo.test",
             "-w",
             "-s",
@@ -176,10 +179,10 @@ def test_site_mode_disable_apply(tmp_path: Path) -> None:
             "--config",
             str(config),
             "site",
-            "demo.test",
-            "--mode",
+            "runtime",
             "disable",
-            "--apply",
+            "demo.test",
+            "-a",
         ],
     )
     assert disable.exit_code == 0
@@ -193,10 +196,10 @@ def test_site_mode_disable_apply(tmp_path: Path) -> None:
     assert scheduler_payload["process"]["enabled"] is False
 
 
-def test_site_mode_status_json(tmp_path: Path) -> None:
+def test_site_runtime_status_json(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     _ = make_source(tmp_path, "demo.test")
-    create = runner.invoke(app, ["--config", str(config), "site", "demo.test", "-w", "-a"])
+    create = runner.invoke(app, ["--config", str(config), "site", "create", "demo.test", "-w", "-a"])
     assert create.exit_code == 0
 
     status = runner.invoke(
@@ -206,9 +209,9 @@ def test_site_mode_status_json(tmp_path: Path) -> None:
             str(config),
             "--json",
             "site",
-            "demo.test",
-            "--mode",
+            "runtime",
             "status",
+            "demo.test",
             "--worker",
         ],
     )
@@ -218,7 +221,7 @@ def test_site_mode_status_json(tmp_path: Path) -> None:
     assert lines[-1]["processes"]["worker"]["enabled"] is True
 
 
-def test_site_mode_requires_valid_value(tmp_path: Path) -> None:
+def test_site_runtime_disable_requires_registered_app(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(
         app,
@@ -226,13 +229,34 @@ def test_site_mode_requires_valid_value(tmp_path: Path) -> None:
             "--config",
             str(config),
             "site",
+            "runtime",
+            "disable",
             "demo.test",
-            "--mode",
-            "foobar",
+            "-a",
         ],
     )
     assert result.exit_code == 2
-    assert "Unsupported mode" in result.stdout
+    assert "Application is not registered" in result.stdout
+
+
+def test_site_runtime_enable_scheduler_ignores_worker_options_in_plan_mode(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "site",
+            "runtime",
+            "enable",
+            "demo.test",
+            "--scheduler",
+            "--concurrency",
+            "0",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Site enable plan prepared for demo.test" in result.stdout
 
 
 def test_create_site_runtime_requires_deploy(tmp_path: Path) -> None:
@@ -252,6 +276,26 @@ def test_create_site_runtime_requires_deploy(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "Runtime enable requires --deploy" in result.stdout
+
+
+def test_create_site_without_worker_ignores_worker_options(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--scheduler",
+            "--concurrency",
+            "0",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Create site plan prepared for demo.test" in result.stdout
 
 
 def test_create_site_le_plan_mode(tmp_path: Path) -> None:
@@ -289,3 +333,31 @@ def test_create_site_le_requires_deploy(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "Let's Encrypt requires --deploy" in result.stdout
+
+
+def test_create_site_atomic_rolls_back_on_ssl_failure(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+
+    def fake_run_issue(_command: list[str]) -> str:
+        raise SslServiceError("certbot failed")
+
+    monkeypatch.setattr("larops.commands.create.run_issue", fake_run_issue)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "-le",
+            "--atomic",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    metadata = tmp_path / "state" / "apps" / "demo.test.json"
+    app_root = tmp_path / "apps" / "demo.test"
+    assert not metadata.exists()
+    assert not app_root.exists()

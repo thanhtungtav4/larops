@@ -81,9 +81,9 @@ Or short command (create + deploy):
 ```bash
 sudo larops --config /etc/larops/larops.yaml create site example.com --apply
 sudo larops --config /etc/larops/larops.yaml create site example.com -le --le-email ops@example.com --apply
-sudo larops --config /etc/larops/larops.yaml site example.com -a
-sudo larops --config /etc/larops/larops.yaml site example.com -m disable -a
-sudo larops --config /etc/larops/larops.yaml site example.com -m status
+sudo larops --config /etc/larops/larops.yaml site create example.com -a
+sudo larops --config /etc/larops/larops.yaml site runtime disable example.com -a
+sudo larops --config /etc/larops/larops.yaml site runtime status example.com
 ```
 
 Enable runtime:

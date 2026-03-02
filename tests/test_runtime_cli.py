@@ -162,3 +162,23 @@ def test_runtime_enable_requires_deployed_app(tmp_path: Path) -> None:
     )
     assert worker_enable.exit_code == 2
     assert "Deploy app before enabling worker" in worker_enable.stdout
+
+
+def test_runtime_disable_requires_registered_app(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    worker_disable = runner.invoke(
+        app,
+        ["--config", str(config), "worker", "disable", "unknown.test", "--apply"],
+    )
+    assert worker_disable.exit_code == 2
+    assert "Application is not registered" in worker_disable.stdout
+
+
+def test_worker_enable_rejects_invalid_concurrency(tmp_path: Path) -> None:
+    config = bootstrap_app(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "worker", "enable", "demo.test", "--concurrency", "0", "--apply"],
+    )
+    assert result.exit_code == 2
+    assert "Worker concurrency must be >= 1" in result.stdout

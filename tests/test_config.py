@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from larops.config import load_config
+import pytest
+
+from larops.config import ConfigError, load_config
 
 
 def test_load_config_defaults_when_missing(tmp_path: Path) -> None:
@@ -63,3 +65,31 @@ def test_load_config_env_overrides_telegram_from_secret_files(tmp_path: Path, mo
     assert config.notifications.telegram.chat_id == "-100123"
     assert config.notifications.telegram.min_severity == "critical"
     assert config.notifications.telegram.batch_size == 50
+
+
+def test_load_config_fail_fast_when_secret_file_missing(tmp_path: Path, monkeypatch) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text("environment: test\n", encoding="utf-8")
+    monkeypatch.setenv("LAROPS_TELEGRAM_BOT_TOKEN_FILE", str(tmp_path / "missing-token"))
+
+    with pytest.raises(ConfigError):
+        load_config(file)
+
+
+def test_load_config_fail_fast_when_secret_file_empty(tmp_path: Path, monkeypatch) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text("environment: test\n", encoding="utf-8")
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("", encoding="utf-8")
+    monkeypatch.setenv("LAROPS_TELEGRAM_BOT_TOKEN_FILE", str(token_file))
+
+    with pytest.raises(ConfigError):
+        load_config(file)
+
+
+def test_load_config_fail_fast_when_batch_size_invalid(tmp_path: Path, monkeypatch) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text("environment: test\n", encoding="utf-8")
+    monkeypatch.setenv("LAROPS_TELEGRAM_BATCH_SIZE", "abc")
+    with pytest.raises(ConfigError):
+        load_config(file)

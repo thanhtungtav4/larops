@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from larops.services.app_lifecycle import (
     load_metadata,
     prune_releases,
     save_metadata,
+    switch_current_symlink,
 )
 from larops.services.runtime_process import RuntimeProcessError, enable_process
 from larops.services.runtime_process import disable_process as runtime_disable_process
@@ -58,10 +60,6 @@ def _emit(
     )
 
 
-def _normalize_mode(mode: str) -> str:
-    return mode.strip().lower()
-
-
 def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, bool]:
     if worker or scheduler or horizon:
         return {
@@ -74,6 +72,137 @@ def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, 
         "scheduler": True,
         "horizon": True,
     }
+
+
+def _validate_worker_options(*, concurrency: int, tries: int, timeout: int) -> None:
+    if concurrency < 1:
+        raise RuntimeProcessError("Worker concurrency must be >= 1.")
+    if tries < 1:
+        raise RuntimeProcessError("Worker tries must be >= 1.")
+    if timeout < 1:
+        raise RuntimeProcessError("Worker timeout must be >= 1 second.")
+
+
+def _runtime_spec_path(state_path: Path, domain: str, process_type: str) -> Path:
+    return state_path / "runtime" / domain / f"{process_type}.json"
+
+
+def _capture_atomic_snapshot(*, paths, state_path: Path) -> dict[str, Any]:
+    current_target: str | None = None
+    if paths.current.exists() and paths.current.is_symlink():
+        try:
+            current_target = str(paths.current.resolve(strict=True))
+        except FileNotFoundError:
+            current_target = None
+    metadata_raw = paths.metadata.read_text(encoding="utf-8") if paths.metadata.exists() else None
+    return {
+        "root_exists": paths.root.exists(),
+        "metadata_exists": paths.metadata.exists(),
+        "metadata_raw": metadata_raw,
+        "current_target": current_target,
+        "runtime_dir_exists": (state_path / "runtime" / paths.root.name).exists(),
+    }
+
+
+def _atomic_rollback_create_site(
+    *,
+    app_ctx: AppContext,
+    domain: str,
+    paths,
+    snapshot: dict[str, Any] | None,
+    runtime_results: dict[str, dict],
+    release_id: str | None,
+    letsencrypt: bool,
+) -> list[dict[str, str]]:
+    if snapshot is None:
+        return [{"step": "skip", "status": "error", "detail": "No snapshot available for rollback."}]
+
+    steps: list[dict[str, str]] = []
+    state_path = Path(app_ctx.config.state_path)
+
+    for process_type in runtime_results:
+        try:
+            runtime_disable_process(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                state_path=state_path,
+                systemd_manage=app_ctx.config.systemd.manage,
+                domain=domain,
+                process_type=process_type,
+            )
+            spec_file = _runtime_spec_path(state_path, domain, process_type)
+            if spec_file.exists():
+                spec_file.unlink()
+            steps.append({"step": f"disable_{process_type}", "status": "ok", "detail": "disabled"})
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"step": f"disable_{process_type}", "status": "error", "detail": str(exc)})
+
+    if release_id:
+        release_dir = paths.releases / release_id
+        try:
+            if release_dir.exists():
+                shutil.rmtree(release_dir, ignore_errors=True)
+            steps.append({"step": "remove_release", "status": "ok", "detail": release_id})
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"step": "remove_release", "status": "error", "detail": str(exc)})
+
+    try:
+        target_raw = snapshot.get("current_target")
+        if target_raw:
+            target_path = Path(target_raw)
+            if target_path.exists():
+                switch_current_symlink(paths.current, target_path)
+                steps.append({"step": "restore_current", "status": "ok", "detail": target_raw})
+            else:
+                steps.append(
+                    {"step": "restore_current", "status": "error", "detail": "Previous current target missing."}
+                )
+        else:
+            if paths.current.exists() or paths.current.is_symlink():
+                paths.current.unlink()
+            steps.append({"step": "restore_current", "status": "ok", "detail": "cleared"})
+    except Exception as exc:  # noqa: BLE001
+        steps.append({"step": "restore_current", "status": "error", "detail": str(exc)})
+
+    try:
+        if snapshot.get("metadata_exists"):
+            metadata_raw = snapshot.get("metadata_raw")
+            if metadata_raw is not None:
+                paths.metadata.parent.mkdir(parents=True, exist_ok=True)
+                paths.metadata.write_text(str(metadata_raw), encoding="utf-8")
+            steps.append({"step": "restore_metadata", "status": "ok", "detail": "restored"})
+        else:
+            if paths.metadata.exists():
+                paths.metadata.unlink()
+            steps.append({"step": "restore_metadata", "status": "ok", "detail": "removed"})
+    except Exception as exc:  # noqa: BLE001
+        steps.append({"step": "restore_metadata", "status": "error", "detail": str(exc)})
+
+    try:
+        if not snapshot.get("root_exists") and paths.root.exists():
+            shutil.rmtree(paths.root, ignore_errors=True)
+            steps.append({"step": "cleanup_root", "status": "ok", "detail": str(paths.root)})
+    except Exception as exc:  # noqa: BLE001
+        steps.append({"step": "cleanup_root", "status": "error", "detail": str(exc)})
+
+    if not snapshot.get("runtime_dir_exists"):
+        runtime_dir = state_path / "runtime" / domain
+        try:
+            if runtime_dir.exists():
+                shutil.rmtree(runtime_dir, ignore_errors=True)
+            steps.append({"step": "cleanup_runtime_dir", "status": "ok", "detail": str(runtime_dir)})
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"step": "cleanup_runtime_dir", "status": "error", "detail": str(exc)})
+
+    if letsencrypt:
+        steps.append(
+            {
+                "step": "tls_note",
+                "status": "warn",
+                "detail": "TLS cert may need manual cleanup if certbot already issued certificate.",
+            }
+        )
+
+    return steps
 
 
 def _enable_runtime_for_site(
@@ -126,6 +255,7 @@ def _disable_runtime_for_site(
         if not enabled:
             continue
         results[process_type] = runtime_disable_process(
+            base_releases_path=Path(app_ctx.config.deploy.releases_path),
             state_path=Path(app_ctx.config.state_path),
             systemd_manage=app_ctx.config.systemd.manage,
             domain=domain,
@@ -170,6 +300,13 @@ def _run_site_runtime_mode(
     horizon: bool,
 ) -> None:
     targets = _resolve_targets(worker, scheduler, horizon)
+    if mode == "enable" and targets["worker"]:
+        try:
+            _validate_worker_options(concurrency=concurrency, tries=tries, timeout=timeout)
+        except RuntimeProcessError as exc:
+            app_ctx.emit_output("error", str(exc))
+            raise typer.Exit(code=2) from exc
+
     app_ctx.emit_output(
         "ok",
         f"Site {mode} plan prepared for {domain}",
@@ -235,16 +372,41 @@ def _run_site_runtime_mode(
     app_ctx.emit_output("ok", f"Site {mode} completed for {domain}", domain=domain, mode=mode, results=results)
 
 
+def manage_site_runtime(
+    *,
+    app_ctx: AppContext,
+    mode: str,
+    domain: str,
+    queue: str,
+    concurrency: int,
+    tries: int,
+    timeout: int,
+    schedule_command: str,
+    apply: bool,
+    worker: bool,
+    scheduler: bool,
+    horizon: bool,
+) -> None:
+    _run_site_runtime_mode(
+        app_ctx=app_ctx,
+        mode=mode,
+        domain=domain,
+        queue=queue,
+        concurrency=concurrency,
+        tries=tries,
+        timeout=timeout,
+        schedule_command=schedule_command,
+        apply=apply,
+        worker=worker,
+        scheduler=scheduler,
+        horizon=horizon,
+    )
+
+
 @create_app.command("site")
 def create_site(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Site domain."),
-    mode: str = typer.Option(
-        "create",
-        "--mode",
-        "-m",
-        help="Mode: create, enable, disable, status.",
-    ),
     source: Path | None = typer.Option(
         None,
         "--source",
@@ -279,32 +441,15 @@ def create_site(
     le_challenge: str = typer.Option("http", "--le-challenge", help="Challenge: http or dns."),
     le_dns_provider: str | None = typer.Option(None, "--le-dns-provider", help="DNS provider for dns challenge."),
     le_staging: bool = typer.Option(False, "--le-staging", help="Use Let's Encrypt staging environment."),
+    atomic: bool = typer.Option(
+        False,
+        "--atomic",
+        help="Rollback created artifacts automatically when create flow fails.",
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing app metadata."),
     apply: bool = typer.Option(False, "--apply", "-a", help="Apply create site workflow."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    normalized_mode = _normalize_mode(mode)
-    if normalized_mode not in {"create", "enable", "disable", "status"}:
-        app_ctx.emit_output("error", f"Unsupported mode: {mode}. Use create|enable|disable|status.")
-        raise typer.Exit(code=2)
-
-    if normalized_mode != "create":
-        _run_site_runtime_mode(
-            app_ctx=app_ctx,
-            mode=normalized_mode,
-            domain=domain,
-            queue=queue,
-            concurrency=concurrency,
-            tries=tries,
-            timeout=timeout,
-            schedule_command=schedule_command,
-            apply=apply,
-            worker=worker,
-            scheduler=scheduler,
-            horizon=horizon,
-        )
-        return
-
     if not deploy and (worker or scheduler or horizon):
         app_ctx.emit_output(
             "error",
@@ -317,6 +462,12 @@ def create_site(
             "Let's Encrypt requires --deploy. Remove -le or use --deploy.",
         )
         raise typer.Exit(code=2)
+    if worker:
+        try:
+            _validate_worker_options(concurrency=concurrency, tries=tries, timeout=timeout)
+        except RuntimeProcessError as exc:
+            app_ctx.emit_output("error", str(exc))
+            raise typer.Exit(code=2) from exc
 
     ssl_issue_command: list[str] | None = None
     if letsencrypt:
@@ -351,7 +502,6 @@ def create_site(
         "ok",
         f"Create site plan prepared for {domain}",
         domain=domain,
-        mode=normalized_mode,
         source=str(source_path),
         ref=ref,
         deploy=deploy,
@@ -361,6 +511,7 @@ def create_site(
         ssl=ssl or letsencrypt,
         letsencrypt=letsencrypt,
         letsencrypt_command=ssl_issue_command,
+        atomic=atomic,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -384,6 +535,11 @@ def create_site(
         },
     )
 
+    release_id: str | None = None
+    deleted_releases: list[str] = []
+    runtime_results: dict[str, dict] = {}
+    rollback_steps: list[dict[str, str]] = []
+    snapshot = _capture_atomic_snapshot(paths=paths, state_path=Path(app_ctx.config.state_path)) if atomic else None
     ssl_result: dict | None = None
     try:
         with CommandLock(_lock_name(domain)):
@@ -395,8 +551,6 @@ def create_site(
                 "created_at": datetime.now(UTC).isoformat(),
             }
             initialize_app(paths, metadata_payload, overwrite=force)
-            release_id: str | None = None
-            deleted_releases: list[str] = []
 
             if deploy:
                 release_id = deploy_release(paths, source_path, ref)
@@ -410,7 +564,6 @@ def create_site(
                 }
                 save_metadata(paths.metadata, metadata)
 
-            runtime_results: dict[str, dict] = {}
             if worker:
                 runtime_results["worker"] = enable_process(
                     base_releases_path=Path(app_ctx.config.deploy.releases_path),
@@ -462,15 +615,29 @@ def create_site(
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
     except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError) as exc:
+        if atomic:
+            rollback_steps = _atomic_rollback_create_site(
+                app_ctx=app_ctx,
+                domain=domain,
+                paths=paths,
+                snapshot=snapshot,
+                runtime_results=runtime_results,
+                release_id=release_id,
+                letsencrypt=letsencrypt,
+            )
         _emit(
             app_ctx,
             severity="error",
             event_type="create.site.failed",
             domain=domain,
             message="Create site failed.",
-            metadata={"error": str(exc)},
+            metadata={
+                "error": str(exc),
+                "atomic": atomic,
+                "rollback": rollback_steps,
+            },
         )
-        app_ctx.emit_output("error", str(exc))
+        app_ctx.emit_output("error", str(exc), atomic=atomic, rollback=rollback_steps)
         raise typer.Exit(code=2) from exc
 
     _emit(

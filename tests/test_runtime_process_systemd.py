@@ -56,6 +56,31 @@ def test_enable_process_calls_systemd_and_writes_quoted_unit(monkeypatch, tmp_pa
     assert ["systemctl", "enable", "--now", service] in calls
 
 
+def test_worker_concurrency_renders_multi_process_execstart(monkeypatch, tmp_path: Path) -> None:
+    domain = "demo.test"
+    base_releases, state_path = seed_deployed_app(tmp_path, domain)
+    unit_dir = tmp_path / "units"
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.runtime_process.run_command", fake_run_command)
+    enable_process(
+        base_releases_path=base_releases,
+        state_path=state_path,
+        unit_dir=unit_dir,
+        systemd_manage=False,
+        service_user="www-data",
+        domain=domain,
+        process_type="worker",
+        options={"queue": "emails", "tries": 3, "timeout": 90, "concurrency": 3},
+    )
+    service = service_name(domain, "worker")
+    unit_body = (unit_dir / service).read_text(encoding="utf-8")
+    assert "for i in $(seq 1 3)" in unit_body
+    assert "queue:work" in unit_body
+
+
 def test_status_process_reads_systemd_state(monkeypatch, tmp_path: Path) -> None:
     domain = "demo.test"
     base_releases, state_path = seed_deployed_app(tmp_path, domain)

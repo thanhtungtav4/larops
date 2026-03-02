@@ -72,20 +72,25 @@ def _exec_start_command(process_type: str, app_current_path: Path, options: dict
     app_path_arg = _shell_double_quote(app_path)
     if process_type == "worker":
         queue = options.get("queue", "default")
-        concurrency = int(options.get("concurrency", 1))
+        concurrency = max(1, int(options.get("concurrency", 1)))
         tries = int(options.get("tries", 3))
         timeout = int(options.get("timeout", 90))
-        script = (
-            f"cd {app_path_arg} && php artisan queue:work"
+        worker_cmd = (
+            "php artisan queue:work"
             f" --queue={shlex.quote(str(queue))}"
             f" --tries={tries}"
             f" --timeout={timeout}"
             " --sleep=1 --max-jobs=0 --max-time=0 --verbose"
         )
-        return (
-            f"bash -lc {shlex.quote(script)}"
-            f" # concurrency={concurrency}"
+        if concurrency == 1:
+            script = f"cd {app_path_arg} && {worker_cmd}"
+            return f"bash -lc {shlex.quote(script)}"
+        script = (
+            f"cd {app_path_arg} && "
+            f"for i in $(seq 1 {concurrency}); do {worker_cmd} & done; "
+            "wait"
         )
+        return f"bash -lc {shlex.quote(script)}"
     if process_type == "scheduler":
         command = options.get("command", "php artisan schedule:run")
         script = f"cd {app_path_arg} && while true; do {command}; sleep 60; done"
@@ -196,11 +201,13 @@ def enable_process(
 
 def disable_process(
     *,
+    base_releases_path: Path,
     state_path: Path,
     systemd_manage: bool,
     domain: str,
     process_type: str,
 ) -> dict[str, Any]:
+    ensure_app_registered(base_releases_path, state_path, domain)
     existing = _read_spec(state_path, domain, process_type)
     service = service_name(domain, process_type)
     if existing is None:

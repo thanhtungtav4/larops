@@ -56,6 +56,15 @@ def enable(
     apply: bool = typer.Option(False, "--apply", help="Apply runtime change."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    if concurrency < 1:
+        app_ctx.emit_output("error", "Worker concurrency must be >= 1.")
+        raise typer.Exit(code=2)
+    if tries < 1:
+        app_ctx.emit_output("error", "Worker tries must be >= 1.")
+        raise typer.Exit(code=2)
+    if timeout < 1:
+        app_ctx.emit_output("error", "Worker timeout must be >= 1 second.")
+        raise typer.Exit(code=2)
     options = {
         "queue": queue,
         "concurrency": concurrency,
@@ -141,6 +150,7 @@ def disable(
     try:
         with CommandLock(_lock_name(domain)):
             spec = disable_process(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
                 state_path=Path(app_ctx.config.state_path),
                 systemd_manage=app_ctx.config.systemd.manage,
                 domain=domain,
@@ -149,6 +159,9 @@ def disable(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
+    except RuntimeProcessError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     app_ctx.emit_output("ok", f"Worker disabled for {domain}", spec=spec)
 
 

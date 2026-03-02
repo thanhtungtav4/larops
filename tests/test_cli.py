@@ -48,3 +48,16 @@ def test_stack_install_json_mode_and_event_file(tmp_path: Path) -> None:
 
     event_lines = events.read_text(encoding="utf-8").strip().splitlines()
     assert len(event_lines) >= 1
+
+
+def test_cli_fails_fast_on_missing_telegram_secret(tmp_path: Path) -> None:
+    config = tmp_path / "larops.yaml"
+    config.write_text("environment: test\n", encoding="utf-8")
+    missing = tmp_path / "missing-token"
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "stack", "install", "--web"],
+        env={"LAROPS_TELEGRAM_BOT_TOKEN_FILE": str(missing)},
+    )
+    assert result.exit_code == 2
+    assert "Config error" in result.stdout

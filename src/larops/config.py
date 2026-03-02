@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field
 DEFAULT_CONFIG_PATH = Path("/etc/larops/larops.yaml")
 
 
+class ConfigError(RuntimeError):
+    pass
+
+
 class DeployConfig(BaseModel):
     releases_path: str = "/var/www"
     source_base_path: str = "/var/www/source"
@@ -66,8 +70,11 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
     def _read_secret(path_raw: str, label: str) -> str:
         path = Path(path_raw)
         if not path.exists():
-            return ""
-        return path.read_text(encoding="utf-8").strip()
+            raise ConfigError(f"{label} file not found: {path}")
+        value = path.read_text(encoding="utf-8").strip()
+        if not value:
+            raise ConfigError(f"{label} file is empty: {path}")
+        return value
 
     env = os.getenv("LAROPS_ENVIRONMENT")
     events_path = os.getenv("LAROPS_EVENTS_PATH")
@@ -103,7 +110,10 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
     if telegram_min_severity:
         updated.notifications.telegram.min_severity = telegram_min_severity
     if telegram_batch_size:
-        updated.notifications.telegram.batch_size = max(1, int(telegram_batch_size))
+        try:
+            updated.notifications.telegram.batch_size = max(1, int(telegram_batch_size))
+        except ValueError as exc:
+            raise ConfigError(f"Invalid LAROPS_TELEGRAM_BATCH_SIZE: {telegram_batch_size}") from exc
 
     if updated.notifications.telegram.bot_token_file:
         updated.notifications.telegram.bot_token = _read_secret(

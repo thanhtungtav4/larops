@@ -83,6 +83,7 @@ def disable(
     try:
         with CommandLock(_lock_name(domain)):
             spec = disable_process(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
                 state_path=Path(app_ctx.config.state_path),
                 systemd_manage=app_ctx.config.systemd.manage,
                 domain=domain,
@@ -91,6 +92,9 @@ def disable(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
+    except RuntimeProcessError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     app_ctx.emit_output("ok", f"Scheduler disabled for {domain}", spec=spec)
 
 
