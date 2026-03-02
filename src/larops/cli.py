@@ -5,6 +5,7 @@ import typer
 from larops import __version__
 from larops.commands.app import app_cmd
 from larops.commands.bootstrap import bootstrap_app
+from larops.commands.create import create_app
 from larops.commands.db import db_app
 from larops.commands.doctor import doctor_app
 from larops.commands.horizon import horizon_app
@@ -59,6 +60,7 @@ def main(
 
 
 app.add_typer(stack_app, name="stack")
+app.add_typer(create_app, name="create")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(app_cmd, name="app")
 app.add_typer(worker_app, name="worker")

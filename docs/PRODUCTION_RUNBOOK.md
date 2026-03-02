@@ -75,6 +75,12 @@ sudo larops --config /etc/larops/larops.yaml app create example.com --apply
 sudo larops --config /etc/larops/larops.yaml app deploy example.com --source /var/www/source --ref main --apply
 ```
 
+Or short command (create + deploy):
+
+```bash
+sudo larops --config /etc/larops/larops.yaml create site example.com --source /var/www/source --apply
+```
+
 Enable runtime:
 
 ```bash

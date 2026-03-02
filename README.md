@@ -35,6 +35,12 @@ Optional app bootstrap in one go:
 larops bootstrap init --domain example.com --source /var/www/source --apply
 ```
 
+WordOps-style short create:
+
+```bash
+larops create site example.com --source /var/www/source --apply
+```
+
 ## Quick Start
 
 ```bash
@@ -83,6 +89,9 @@ larops --config /tmp/larops.yaml worker enable demo.test --queue default --concu
 larops --config /tmp/larops.yaml scheduler enable demo.test --apply
 larops --config /tmp/larops.yaml horizon enable demo.test --apply
 larops --config /tmp/larops.yaml --json worker status demo.test
+
+# WordOps-style one command for create + deploy (+ optional runtime)
+larops --config /tmp/larops.yaml create site demo.test --source . --worker --scheduler --apply
 
 # SSL lifecycle
 larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
