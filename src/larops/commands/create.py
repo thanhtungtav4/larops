@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from larops.core.locks import CommandLock, CommandLockError
+from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_lifecycle import (
@@ -20,6 +21,11 @@ from larops.services.app_lifecycle import (
     save_metadata,
 )
 from larops.services.runtime_process import RuntimeProcessError, enable_process
+from larops.services.ssl_service import (
+    SslServiceError,
+    build_issue_command,
+    run_issue,
+)
 
 create_app = typer.Typer(help="WordOps-style create shortcuts.")
 
@@ -77,6 +83,16 @@ def create_site(
     php: str = typer.Option("8.3", "--php", help="PHP runtime version."),
     db: str = typer.Option("mysql", "--db", help="Database engine."),
     ssl: bool = typer.Option(False, "--ssl", help="Enable SSL metadata flag."),
+    letsencrypt: bool = typer.Option(
+        False,
+        "--letsencrypt",
+        "-le",
+        help="Issue Let's Encrypt certificate (WordOps-style).",
+    ),
+    le_email: str | None = typer.Option(None, "--le-email", help="Email for Let's Encrypt registration."),
+    le_challenge: str = typer.Option("http", "--le-challenge", help="Challenge: http or dns."),
+    le_dns_provider: str | None = typer.Option(None, "--le-dns-provider", help="DNS provider for dns challenge."),
+    le_staging: bool = typer.Option(False, "--le-staging", help="Use Let's Encrypt staging environment."),
     force: bool = typer.Option(False, "--force", help="Overwrite existing app metadata."),
     apply: bool = typer.Option(False, "--apply", help="Apply create site workflow."),
 ) -> None:
@@ -87,6 +103,26 @@ def create_site(
             "Runtime enable requires --deploy. Remove runtime flags or use --deploy.",
         )
         raise typer.Exit(code=2)
+    if letsencrypt and not deploy:
+        app_ctx.emit_output(
+            "error",
+            "Let's Encrypt requires --deploy. Remove -le or use --deploy.",
+        )
+        raise typer.Exit(code=2)
+
+    ssl_issue_command: list[str] | None = None
+    if letsencrypt:
+        try:
+            ssl_issue_command = build_issue_command(
+                domain=domain,
+                email=le_email,
+                challenge=le_challenge,
+                dns_provider=le_dns_provider,
+                staging=le_staging,
+            )
+        except SslServiceError as exc:
+            app_ctx.emit_output("error", str(exc))
+            raise typer.Exit(code=2) from exc
 
     source_path = (
         source.resolve()
@@ -113,7 +149,9 @@ def create_site(
         runtime=runtime_plan,
         php=php,
         db=db,
-        ssl=ssl,
+        ssl=ssl or letsencrypt,
+        letsencrypt=letsencrypt,
+        letsencrypt_command=ssl_issue_command,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -134,13 +172,14 @@ def create_site(
         },
     )
 
+    ssl_result: dict | None = None
     try:
         with CommandLock(_lock_name(domain)):
             metadata_payload = {
                 "domain": domain,
                 "php": php,
                 "db": db,
-                "ssl": ssl,
+                "ssl": ssl or letsencrypt,
                 "created_at": datetime.now(UTC).isoformat(),
             }
             initialize_app(paths, metadata_payload, overwrite=force)
@@ -198,10 +237,19 @@ def create_site(
                     process_type="horizon",
                     options={},
                 )
+            if letsencrypt:
+                assert ssl_issue_command is not None
+                output = run_issue(ssl_issue_command)
+                ssl_result = {
+                    "provider": "letsencrypt",
+                    "challenge": le_challenge,
+                    "staging": le_staging,
+                    "output": output,
+                }
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, RuntimeProcessError) as exc:
+    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError) as exc:
         _emit(
             app_ctx,
             severity="error",
@@ -228,4 +276,5 @@ def create_site(
         release_id=release_id,
         deleted_releases=deleted_releases,
         runtime_enabled=runtime_results,
+        ssl_result=ssl_result,
     )

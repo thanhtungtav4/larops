@@ -120,3 +120,40 @@ def test_create_site_runtime_requires_deploy(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "Runtime enable requires --deploy" in result.stdout
+
+
+def test_create_site_le_plan_mode(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "-le",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Create site plan prepared for demo.test" in result.stdout
+
+
+def test_create_site_le_requires_deploy(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "-le",
+            "--no-deploy",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "Let's Encrypt requires --deploy" in result.stdout

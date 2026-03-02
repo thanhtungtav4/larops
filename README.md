@@ -39,6 +39,7 @@ WordOps-style short create:
 
 ```bash
 larops create site example.com --apply
+larops create site example.com -le --apply
 ```
 
 ## Quick Start
@@ -95,6 +96,7 @@ larops --config /tmp/larops.yaml --json worker status demo.test
 mkdir -p /tmp/larops-source/demo.test
 cp -R . /tmp/larops-source/demo.test
 larops --config /tmp/larops.yaml create site demo.test --worker --scheduler --apply
+larops --config /tmp/larops.yaml create site demo.test -le --le-email ops@example.com --apply
 
 # SSL lifecycle
 larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
