@@ -13,7 +13,7 @@ LarOps standardizes Laravel infrastructure operations:
 
 ## Current Stage
 
-S3 foundation: runtime context, stack planner, and app lifecycle (`create`, `deploy`, `rollback`, `info`).
+S4 foundation: runtime context, stack planner, app lifecycle, and process commands (`worker`, `scheduler`, `horizon`).
 
 ## Quick Start
 
@@ -44,6 +44,11 @@ larops --config /tmp/larops.yaml app create demo.test --apply
 larops --config /tmp/larops.yaml app deploy demo.test --source . --apply
 larops --config /tmp/larops.yaml app rollback demo.test --to previous --apply
 larops --config /tmp/larops.yaml --json app info demo.test
+
+larops --config /tmp/larops.yaml worker enable demo.test --queue default --concurrency 2 --apply
+larops --config /tmp/larops.yaml scheduler enable demo.test --apply
+larops --config /tmp/larops.yaml horizon enable demo.test --apply
+larops --config /tmp/larops.yaml --json worker status demo.test
 ```
 
 ## Docker Test

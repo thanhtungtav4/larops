@@ -5,7 +5,10 @@ import typer
 from larops import __version__
 from larops.commands.app import app_cmd
 from larops.commands.doctor import doctor_app
+from larops.commands.horizon import horizon_app
+from larops.commands.scheduler import scheduler_app
 from larops.commands.stack import stack_app
+from larops.commands.worker import worker_app
 from larops.config import load_config
 from larops.runtime import AppContext
 
@@ -52,4 +55,7 @@ def main(
 
 app.add_typer(stack_app, name="stack")
 app.add_typer(app_cmd, name="app")
+app.add_typer(worker_app, name="worker")
+app.add_typer(scheduler_app, name="scheduler")
+app.add_typer(horizon_app, name="horizon")
 app.add_typer(doctor_app, name="doctor")
