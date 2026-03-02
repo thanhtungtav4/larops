@@ -4,6 +4,7 @@ import re
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -21,6 +22,8 @@ from larops.services.app_lifecycle import (
     save_metadata,
 )
 from larops.services.runtime_process import RuntimeProcessError, enable_process
+from larops.services.runtime_process import disable_process as runtime_disable_process
+from larops.services.runtime_process import status_process as runtime_status_process
 from larops.services.ssl_service import (
     SslServiceError,
     build_issue_command,
@@ -55,10 +58,193 @@ def _emit(
     )
 
 
+def _normalize_mode(mode: str) -> str:
+    return mode.strip().lower()
+
+
+def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, bool]:
+    if worker or scheduler or horizon:
+        return {
+            "worker": worker,
+            "scheduler": scheduler,
+            "horizon": horizon,
+        }
+    return {
+        "worker": True,
+        "scheduler": True,
+        "horizon": True,
+    }
+
+
+def _enable_runtime_for_site(
+    *,
+    app_ctx: AppContext,
+    domain: str,
+    queue: str,
+    concurrency: int,
+    tries: int,
+    timeout: int,
+    schedule_command: str,
+    targets: dict[str, bool],
+) -> dict[str, dict]:
+    results: dict[str, dict] = {}
+    for process_type, enabled in targets.items():
+        if not enabled:
+            continue
+        if process_type == "worker":
+            options: dict[str, Any] = {
+                "queue": queue,
+                "concurrency": concurrency,
+                "tries": tries,
+                "timeout": timeout,
+            }
+        elif process_type == "scheduler":
+            options = {"command": schedule_command}
+        else:
+            options = {}
+        results[process_type] = enable_process(
+            base_releases_path=Path(app_ctx.config.deploy.releases_path),
+            state_path=Path(app_ctx.config.state_path),
+            unit_dir=Path(app_ctx.config.systemd.unit_dir),
+            systemd_manage=app_ctx.config.systemd.manage,
+            service_user=app_ctx.config.systemd.user,
+            domain=domain,
+            process_type=process_type,
+            options=options,
+        )
+    return results
+
+
+def _disable_runtime_for_site(
+    *,
+    app_ctx: AppContext,
+    domain: str,
+    targets: dict[str, bool],
+) -> dict[str, dict]:
+    results: dict[str, dict] = {}
+    for process_type, enabled in targets.items():
+        if not enabled:
+            continue
+        results[process_type] = runtime_disable_process(
+            state_path=Path(app_ctx.config.state_path),
+            systemd_manage=app_ctx.config.systemd.manage,
+            domain=domain,
+            process_type=process_type,
+        )
+    return results
+
+
+def _status_runtime_for_site(
+    *,
+    app_ctx: AppContext,
+    domain: str,
+    targets: dict[str, bool],
+) -> dict[str, dict]:
+    results: dict[str, dict] = {}
+    for process_type, enabled in targets.items():
+        if not enabled:
+            continue
+        results[process_type] = runtime_status_process(
+            state_path=Path(app_ctx.config.state_path),
+            unit_dir=Path(app_ctx.config.systemd.unit_dir),
+            systemd_manage=app_ctx.config.systemd.manage,
+            domain=domain,
+            process_type=process_type,
+        )
+    return results
+
+
+def _run_site_runtime_mode(
+    *,
+    app_ctx: AppContext,
+    mode: str,
+    domain: str,
+    queue: str,
+    concurrency: int,
+    tries: int,
+    timeout: int,
+    schedule_command: str,
+    apply: bool,
+    worker: bool,
+    scheduler: bool,
+    horizon: bool,
+) -> None:
+    targets = _resolve_targets(worker, scheduler, horizon)
+    app_ctx.emit_output(
+        "ok",
+        f"Site {mode} plan prepared for {domain}",
+        domain=domain,
+        mode=mode,
+        targets=targets,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+
+    if mode == "status":
+        status = _status_runtime_for_site(app_ctx=app_ctx, domain=domain, targets=targets)
+        app_ctx.emit_output("ok", f"Site status for {domain}", domain=domain, processes=status)
+        return
+
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    _emit(
+        app_ctx,
+        severity="info",
+        event_type=f"site.{mode}.started",
+        domain=domain,
+        message=f"Site {mode} started.",
+        metadata={"targets": targets},
+    )
+    try:
+        with CommandLock(_lock_name(domain)):
+            if mode == "enable":
+                results = _enable_runtime_for_site(
+                    app_ctx=app_ctx,
+                    domain=domain,
+                    queue=queue,
+                    concurrency=concurrency,
+                    tries=tries,
+                    timeout=timeout,
+                    schedule_command=schedule_command,
+                    targets=targets,
+                )
+            else:
+                results = _disable_runtime_for_site(app_ctx=app_ctx, domain=domain, targets=targets)
+    except (CommandLockError, RuntimeProcessError) as exc:
+        _emit(
+            app_ctx,
+            severity="error",
+            event_type=f"site.{mode}.failed",
+            domain=domain,
+            message=f"Site {mode} failed.",
+            metadata={"error": str(exc)},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    _emit(
+        app_ctx,
+        severity="info",
+        event_type=f"site.{mode}.completed",
+        domain=domain,
+        message=f"Site {mode} completed.",
+        metadata={"targets": targets},
+    )
+    app_ctx.emit_output("ok", f"Site {mode} completed for {domain}", domain=domain, mode=mode, results=results)
+
+
 @create_app.command("site")
 def create_site(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Site domain."),
+    mode: str = typer.Option(
+        "create",
+        "--mode",
+        "-m",
+        help="Mode: create, enable, disable, status.",
+    ),
     source: Path | None = typer.Option(
         None,
         "--source",
@@ -97,6 +283,28 @@ def create_site(
     apply: bool = typer.Option(False, "--apply", "-a", help="Apply create site workflow."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    normalized_mode = _normalize_mode(mode)
+    if normalized_mode not in {"create", "enable", "disable", "status"}:
+        app_ctx.emit_output("error", f"Unsupported mode: {mode}. Use create|enable|disable|status.")
+        raise typer.Exit(code=2)
+
+    if normalized_mode != "create":
+        _run_site_runtime_mode(
+            app_ctx=app_ctx,
+            mode=normalized_mode,
+            domain=domain,
+            queue=queue,
+            concurrency=concurrency,
+            tries=tries,
+            timeout=timeout,
+            schedule_command=schedule_command,
+            apply=apply,
+            worker=worker,
+            scheduler=scheduler,
+            horizon=horizon,
+        )
+        return
+
     if not deploy and (worker or scheduler or horizon):
         app_ctx.emit_output(
             "error",
@@ -143,6 +351,7 @@ def create_site(
         "ok",
         f"Create site plan prepared for {domain}",
         domain=domain,
+        mode=normalized_mode,
         source=str(source_path),
         ref=ref,
         deploy=deploy,

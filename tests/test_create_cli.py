@@ -153,6 +153,88 @@ def test_create_site_apply_with_runtime_flags(tmp_path: Path) -> None:
     assert scheduler_payload["process"]["enabled"] is True
 
 
+def test_site_mode_disable_apply(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    create = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "site",
+            "demo.test",
+            "-w",
+            "-s",
+            "-a",
+        ],
+    )
+    assert create.exit_code == 0
+
+    disable = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "site",
+            "demo.test",
+            "--mode",
+            "disable",
+            "--apply",
+        ],
+    )
+    assert disable.exit_code == 0
+
+    worker_status = runner.invoke(app, ["--config", str(config), "--json", "worker", "status", "demo.test"])
+    worker_payload = json.loads(worker_status.stdout.strip())
+    assert worker_payload["process"]["enabled"] is False
+
+    scheduler_status = runner.invoke(app, ["--config", str(config), "--json", "scheduler", "status", "demo.test"])
+    scheduler_payload = json.loads(scheduler_status.stdout.strip())
+    assert scheduler_payload["process"]["enabled"] is False
+
+
+def test_site_mode_status_json(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    create = runner.invoke(app, ["--config", str(config), "site", "demo.test", "-w", "-a"])
+    assert create.exit_code == 0
+
+    status = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "site",
+            "demo.test",
+            "--mode",
+            "status",
+            "--worker",
+        ],
+    )
+    assert status.exit_code == 0
+    lines = [json.loads(line) for line in status.stdout.strip().splitlines()]
+    assert lines[-1]["message"] == "Site status for demo.test"
+    assert lines[-1]["processes"]["worker"]["enabled"] is True
+
+
+def test_site_mode_requires_valid_value(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "site",
+            "demo.test",
+            "--mode",
+            "foobar",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "Unsupported mode" in result.stdout
+
+
 def test_create_site_runtime_requires_deploy(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(

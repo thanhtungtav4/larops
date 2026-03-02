@@ -42,6 +42,8 @@ larops create site example.com --apply
 larops create site example.com -le --apply
 larops site example.com -a
 larops site example.com -le -a
+larops site example.com -m disable -a
+larops site example.com -m status
 ```
 
 ## Quick Start
@@ -100,6 +102,9 @@ cp -R . /tmp/larops-source/demo.test
 larops --config /tmp/larops.yaml create site demo.test --worker --scheduler --apply
 larops --config /tmp/larops.yaml create site demo.test -le --le-email ops@example.com --apply
 larops --config /tmp/larops.yaml site demo.test -w -s -a
+larops --config /tmp/larops.yaml site demo.test -m disable -a
+larops --config /tmp/larops.yaml site demo.test -m enable -w -s -a
+larops --config /tmp/larops.yaml site demo.test -m status
 
 # SSL lifecycle
 larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
