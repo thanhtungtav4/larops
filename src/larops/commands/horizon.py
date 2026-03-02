@@ -44,6 +44,9 @@ def enable(
             spec = enable_process(
                 base_releases_path=Path(app_ctx.config.deploy.releases_path),
                 state_path=Path(app_ctx.config.state_path),
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                service_user=app_ctx.config.systemd.user,
                 domain=domain,
                 process_type="horizon",
                 options={},
@@ -78,6 +81,7 @@ def disable(
         with CommandLock(_lock_name(domain)):
             spec = disable_process(
                 state_path=Path(app_ctx.config.state_path),
+                systemd_manage=app_ctx.config.systemd.manage,
                 domain=domain,
                 process_type="horizon",
             )
@@ -108,6 +112,7 @@ def terminate(
         with CommandLock(_lock_name(domain)):
             spec = terminate_process(
                 state_path=Path(app_ctx.config.state_path),
+                systemd_manage=app_ctx.config.systemd.manage,
                 domain=domain,
                 process_type="horizon",
             )
@@ -128,8 +133,9 @@ def status(
     app_ctx: AppContext = ctx.obj
     spec = status_process(
         state_path=Path(app_ctx.config.state_path),
+        unit_dir=Path(app_ctx.config.systemd.unit_dir),
+        systemd_manage=app_ctx.config.systemd.manage,
         domain=domain,
         process_type="horizon",
     )
     app_ctx.emit_output("ok", f"Horizon status for {domain}", process=spec)
-

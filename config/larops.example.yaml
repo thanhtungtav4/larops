@@ -6,6 +6,11 @@ deploy:
   keep_releases: 5
   health_check_path: /up
 
+systemd:
+  manage: true
+  unit_dir: /etc/systemd/system
+  user: www-data
+
 events:
   sink: jsonl
   path: /var/log/larops/events.jsonl
@@ -15,3 +20,5 @@ notifications:
     enabled: false
     bot_token: ""
     chat_id: ""
+    min_severity: error
+    batch_size: 20

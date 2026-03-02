@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,10 @@ def _sanitize_domain(domain: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "-", domain).strip("-")
 
 
+def service_name(domain: str, process_type: str) -> str:
+    return f"larops-{_sanitize_domain(domain)}-{process_type}.service"
+
+
 def _runtime_dir(state_path: Path, domain: str) -> Path:
     return state_path / "runtime" / domain
 
@@ -26,12 +31,17 @@ def _spec_path(state_path: Path, domain: str, process_type: str) -> Path:
     return _runtime_dir(state_path, domain) / f"{process_type}.json"
 
 
-def _unit_path(state_path: Path, domain: str, process_type: str) -> Path:
-    return _runtime_dir(state_path, domain) / "units" / f"larops-{_sanitize_domain(domain)}-{process_type}.service"
+def _unit_path(unit_dir: Path, domain: str, process_type: str) -> Path:
+    return unit_dir / service_name(domain, process_type)
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _shell_double_quote(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def ensure_app_registered(base_releases_path: Path, state_path: Path, domain: str) -> dict[str, Any]:
@@ -59,28 +69,41 @@ def _write_spec(state_path: Path, domain: str, process_type: str, payload: dict[
 
 def _exec_start_command(process_type: str, app_current_path: Path, options: dict[str, Any]) -> str:
     app_path = str(app_current_path)
+    app_path_arg = _shell_double_quote(app_path)
     if process_type == "worker":
         queue = options.get("queue", "default")
         concurrency = int(options.get("concurrency", 1))
         tries = int(options.get("tries", 3))
         timeout = int(options.get("timeout", 90))
-        return (
-            f"bash -lc \"cd {app_path} && php artisan queue:work"
-            f" --queue={queue}"
+        script = (
+            f"cd {app_path_arg} && php artisan queue:work"
+            f" --queue={shlex.quote(str(queue))}"
             f" --tries={tries}"
             f" --timeout={timeout}"
-            " --sleep=1 --max-jobs=0 --max-time=0 --verbose\""
+            " --sleep=1 --max-jobs=0 --max-time=0 --verbose"
+        )
+        return (
+            f"bash -lc {shlex.quote(script)}"
             f" # concurrency={concurrency}"
         )
     if process_type == "scheduler":
         command = options.get("command", "php artisan schedule:run")
-        return f"bash -lc \"cd {app_path} && while true; do {command}; sleep 60; done\""
+        script = f"cd {app_path_arg} && while true; do {command}; sleep 60; done"
+        return f"bash -lc {shlex.quote(script)}"
     if process_type == "horizon":
-        return f"bash -lc \"cd {app_path} && php artisan horizon\""
+        script = f"cd {app_path_arg} && php artisan horizon"
+        return f"bash -lc {shlex.quote(script)}"
     raise RuntimeProcessError(f"Unsupported process type: {process_type}")
 
 
-def render_systemd_unit(domain: str, process_type: str, app_current_path: Path, options: dict[str, Any]) -> str:
+def render_systemd_unit(
+    domain: str,
+    process_type: str,
+    app_current_path: Path,
+    options: dict[str, Any],
+    *,
+    user: str,
+) -> str:
     exec_start = _exec_start_command(process_type, app_current_path, options)
     safe_domain = _sanitize_domain(domain)
     description = f"LarOps {process_type} process for {safe_domain}"
@@ -92,7 +115,7 @@ def render_systemd_unit(domain: str, process_type: str, app_current_path: Path, 
             "",
             "[Service]",
             "Type=simple",
-            "User=www-data",
+            f"User={user}",
             "Restart=always",
             "RestartSec=5",
             f"ExecStart={exec_start}",
@@ -104,10 +127,27 @@ def render_systemd_unit(domain: str, process_type: str, app_current_path: Path, 
     )
 
 
+def _run_systemctl(args: list[str], *, check: bool = True) -> str:
+    completed = run_command(["systemctl", *args], check=check)
+    return (completed.stdout or completed.stderr or "").strip()
+
+
+def _systemd_status(service: str) -> dict[str, Any]:
+    active = run_command(["systemctl", "is-active", service], check=False)
+    enabled = run_command(["systemctl", "is-enabled", service], check=False)
+    return {
+        "active": (active.stdout or active.stderr or "").strip(),
+        "enabled": (enabled.stdout or enabled.stderr or "").strip(),
+    }
+
+
 def enable_process(
     *,
     base_releases_path: Path,
     state_path: Path,
+    unit_dir: Path,
+    systemd_manage: bool,
+    service_user: str,
     domain: str,
     process_type: str,
     options: dict[str, Any],
@@ -120,12 +160,15 @@ def enable_process(
         )
 
     existing = _read_spec(state_path, domain, process_type) or {}
+    service = service_name(domain, process_type)
     spec = {
         **existing,
         "domain": domain,
         "process_type": process_type,
         "enabled": True,
         "autostart": True,
+        "service_name": service,
+        "systemd_managed": systemd_manage,
         "options": options,
         "updated_at": _utc_now(),
     }
@@ -136,21 +179,37 @@ def enable_process(
     spec.setdefault("run_count", 0)
 
     _write_spec(state_path, domain, process_type, spec)
-    unit = render_systemd_unit(domain, process_type, app_paths.current, options)
-    unit_path = _unit_path(state_path, domain, process_type)
+    unit = render_systemd_unit(domain, process_type, app_paths.current, options, user=service_user)
+    unit_path = _unit_path(unit_dir, domain, process_type)
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     unit_path.write_text(unit, encoding="utf-8")
+
+    if systemd_manage:
+        try:
+            _run_systemctl(["daemon-reload"], check=True)
+            _run_systemctl(["enable", "--now", service], check=True)
+        except ShellCommandError as exc:
+            raise RuntimeProcessError(str(exc)) from exc
+
     return spec
 
 
-def disable_process(*, state_path: Path, domain: str, process_type: str) -> dict[str, Any]:
+def disable_process(
+    *,
+    state_path: Path,
+    systemd_manage: bool,
+    domain: str,
+    process_type: str,
+) -> dict[str, Any]:
     existing = _read_spec(state_path, domain, process_type)
+    service = service_name(domain, process_type)
     if existing is None:
         spec = {
             "domain": domain,
             "process_type": process_type,
             "enabled": False,
             "autostart": False,
+            "service_name": service,
             "updated_at": _utc_now(),
             "created_at": _utc_now(),
             "restart_count": 0,
@@ -165,44 +224,88 @@ def disable_process(*, state_path: Path, domain: str, process_type: str) -> dict
             "autostart": False,
             "updated_at": _utc_now(),
         }
+
+    if systemd_manage:
+        run_command(["systemctl", "disable", "--now", service], check=False)
     return _write_spec(state_path, domain, process_type, spec)
 
 
-def restart_process(*, state_path: Path, domain: str, process_type: str) -> dict[str, Any]:
+def restart_process(
+    *,
+    state_path: Path,
+    systemd_manage: bool,
+    domain: str,
+    process_type: str,
+) -> dict[str, Any]:
     spec = _read_spec(state_path, domain, process_type)
     if spec is None or not spec.get("enabled"):
         raise RuntimeProcessError(f"{process_type} is not enabled for {domain}.")
+
+    if systemd_manage:
+        service = spec.get("service_name") or service_name(domain, process_type)
+        try:
+            _run_systemctl(["restart", service], check=True)
+        except ShellCommandError as exc:
+            raise RuntimeProcessError(str(exc)) from exc
+
     spec["restart_count"] = int(spec.get("restart_count", 0)) + 1
     spec["last_restart_at"] = _utc_now()
     spec["updated_at"] = _utc_now()
     return _write_spec(state_path, domain, process_type, spec)
 
 
-def terminate_process(*, state_path: Path, domain: str, process_type: str) -> dict[str, Any]:
+def terminate_process(
+    *,
+    state_path: Path,
+    systemd_manage: bool,
+    domain: str,
+    process_type: str,
+) -> dict[str, Any]:
     spec = _read_spec(state_path, domain, process_type)
     if spec is None or not spec.get("enabled"):
         raise RuntimeProcessError(f"{process_type} is not enabled for {domain}.")
+
+    if systemd_manage:
+        service = spec.get("service_name") or service_name(domain, process_type)
+        try:
+            _run_systemctl(["kill", "-s", "SIGTERM", service], check=True)
+        except ShellCommandError as exc:
+            raise RuntimeProcessError(str(exc)) from exc
+
     spec["terminate_count"] = int(spec.get("terminate_count", 0)) + 1
     spec["last_terminate_at"] = _utc_now()
     spec["updated_at"] = _utc_now()
     return _write_spec(state_path, domain, process_type, spec)
 
 
-def status_process(*, state_path: Path, domain: str, process_type: str) -> dict[str, Any]:
+def status_process(
+    *,
+    state_path: Path,
+    unit_dir: Path,
+    systemd_manage: bool,
+    domain: str,
+    process_type: str,
+) -> dict[str, Any]:
     spec = _read_spec(state_path, domain, process_type)
-    unit_path = _unit_path(state_path, domain, process_type)
+    unit_path = _unit_path(unit_dir, domain, process_type)
+    service = service_name(domain, process_type)
     if spec is None:
         return {
             "domain": domain,
             "process_type": process_type,
             "enabled": False,
             "exists": False,
+            "service_name": service,
             "unit_path": str(unit_path),
+            "systemd": _systemd_status(service) if systemd_manage else {"active": "unmanaged", "enabled": "unmanaged"},
         }
+
     return {
         **spec,
         "exists": True,
+        "service_name": service,
         "unit_path": str(unit_path),
+        "systemd": _systemd_status(service) if systemd_manage else {"active": "unmanaged", "enabled": "unmanaged"},
     }
 
 
@@ -228,7 +331,8 @@ def run_scheduler_once(
 
     if execute:
         try:
-            completed = run_command(["bash", "-lc", f"cd {app_paths.current} && {command}"], check=True)
+            script = f"cd {_shell_double_quote(str(app_paths.current))} && {command}"
+            completed = run_command(["bash", "-lc", script], check=True)
         except ShellCommandError as exc:
             raise RuntimeProcessError(str(exc)) from exc
         result["stdout"] = completed.stdout.strip()

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -28,8 +29,28 @@ def write_config(tmp_path: Path) -> Path:
     return config_file
 
 
+def write_secret(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "[client]",
+                "user=appuser",
+                "password=appsecret",
+                "host=127.0.0.1",
+                "port=3306",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(path, 0o600)
+
+
 def test_db_backup_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
     result = runner.invoke(
         app,
         [
@@ -40,8 +61,8 @@ def test_db_backup_plan_mode(tmp_path: Path) -> None:
             "demo.test",
             "--database",
             "appdb",
-            "--user",
-            "appuser",
+            "--credential-file",
+            str(secret),
         ],
     )
     assert result.exit_code == 0
@@ -74,6 +95,8 @@ def test_db_list_backups(tmp_path: Path) -> None:
 def test_db_restore_requires_existing_backup(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     missing = tmp_path / "missing.sql.gz"
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
     result = runner.invoke(
         app,
         [
@@ -86,10 +109,75 @@ def test_db_restore_requires_existing_backup(tmp_path: Path) -> None:
             str(missing),
             "--database",
             "appdb",
-            "--user",
-            "appuser",
+            "--credential-file",
+            str(secret),
         ],
     )
     assert result.exit_code == 2
     assert "Backup file not found" in result.stdout
 
+
+def test_db_backup_rejects_invalid_database_name(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "db",
+            "backup",
+            "demo.test",
+            "--database",
+            "appdb;DROP TABLE users",
+            "--credential-file",
+            str(secret),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "Invalid database name" in result.stdout
+
+
+def test_db_credential_set_and_show(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    secret = tmp_path / "demo.cnf"
+    env = {"DB_PASSWORD_TEST": "super-secret"}
+    set_result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "db",
+            "credential",
+            "set",
+            "demo.test",
+            "--user",
+            "appuser",
+            "--password-env",
+            "DB_PASSWORD_TEST",
+            "--credential-file",
+            str(secret),
+            "--apply",
+        ],
+        env=env,
+    )
+    assert set_result.exit_code == 0
+    assert secret.exists()
+    assert oct(secret.stat().st_mode & 0o777) == "0o600"
+
+    show_result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "db",
+            "credential",
+            "show",
+            "demo.test",
+            "--credential-file",
+            str(secret),
+        ],
+    )
+    assert show_result.exit_code == 0
+    assert "Credential file status for demo.test" in show_result.stdout

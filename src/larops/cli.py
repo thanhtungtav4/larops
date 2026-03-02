@@ -8,6 +8,7 @@ from larops.commands.bootstrap import bootstrap_app
 from larops.commands.db import db_app
 from larops.commands.doctor import doctor_app
 from larops.commands.horizon import horizon_app
+from larops.commands.notify import notify_app
 from larops.commands.scheduler import scheduler_app
 from larops.commands.ssl import ssl_app
 from larops.commands.stack import stack_app
@@ -64,4 +65,5 @@ app.add_typer(scheduler_app, name="scheduler")
 app.add_typer(horizon_app, name="horizon")
 app.add_typer(ssl_app, name="ssl")
 app.add_typer(db_app, name="db")
+app.add_typer(notify_app, name="notify")
 app.add_typer(doctor_app, name="doctor")

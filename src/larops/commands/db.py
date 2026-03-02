@@ -16,12 +16,16 @@ from larops.services.db_service import (
     build_backup_command,
     build_restore_command,
     default_backup_dir,
+    default_credential_file,
     list_backups,
     run_backup,
     run_restore,
+    write_mysql_credentials,
 )
 
 db_app = typer.Typer(help="Manage database backup and restore.")
+credential_app = typer.Typer(help="Manage secure DB credentials.")
+db_app.add_typer(credential_app, name="credential")
 
 
 def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, metadata: dict | None = None) -> None:
@@ -36,37 +40,39 @@ def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, met
     )
 
 
-@db_app.command("backup")
-def backup(
+def _resolve_credential_path(app_ctx: AppContext, domain: str, credential_file: Path | None) -> Path:
+    return credential_file or default_credential_file(Path(app_ctx.config.state_path), domain)
+
+
+@credential_app.command("set")
+def credential_set(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Application domain."),
-    database: str = typer.Option(..., "--database", help="Database name."),
     user: str = typer.Option(..., "--user", help="Database user."),
-    password_env: str = typer.Option("LAROPS_DB_PASSWORD", "--password-env", help="Password env var name."),
+    password_env: str = typer.Option("LAROPS_DB_PASSWORD", "--password-env", help="Env var containing DB password."),
     host: str = typer.Option("127.0.0.1", "--host", help="Database host."),
     port: int = typer.Option(3306, "--port", help="Database port."),
-    target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
-    apply: bool = typer.Option(False, "--apply", help="Apply backup operation."),
+    credential_file: Path | None = typer.Option(
+        None,
+        "--credential-file",
+        help="Credential file path.",
+        dir_okay=False,
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply credential write."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    target = _resolve_credential_path(app_ctx, domain, credential_file)
     password = os.getenv(password_env, "")
-    backup_dir = target_dir or default_backup_dir(Path(app_ctx.config.state_path), domain)
-    backup_file = backup_dir / backup_filename(domain)
 
-    command_preview = build_backup_command(
-        backup_file=backup_file,
-        database=database,
-        user=user,
-        password="***",
-        host=host,
-        port=port,
-    )
     app_ctx.emit_output(
         "ok",
-        f"DB backup plan prepared for {domain}",
+        f"Credential set plan prepared for {domain}",
         domain=domain,
-        backup_file=str(backup_file),
-        command=command_preview,
+        credential_file=str(target),
+        user=user,
+        host=host,
+        port=port,
+        password_env=password_env,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -77,14 +83,96 @@ def backup(
         app_ctx.emit_output("error", f"Password env var is empty: {password_env}")
         raise typer.Exit(code=2)
 
+    try:
+        with CommandLock("db-credential-set"):
+            write_mysql_credentials(
+                credential_file=target,
+                user=user,
+                password=password,
+                host=host,
+                port=port,
+            )
+    except (CommandLockError, DbServiceError) as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(app_ctx, "info", "db.credential.set", "DB credential file updated.", {"domain": domain, "file": str(target)})
+    app_ctx.emit_output("ok", f"Credential file updated for {domain}", credential_file=str(target))
+
+
+@credential_app.command("show")
+def credential_show(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    credential_file: Path | None = typer.Option(
+        None,
+        "--credential-file",
+        help="Credential file path.",
+        dir_okay=False,
+    ),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    target = _resolve_credential_path(app_ctx, domain, credential_file)
+    exists = target.exists()
+    mode = oct(target.stat().st_mode & 0o777) if exists else None
+    app_ctx.emit_output(
+        "ok",
+        f"Credential file status for {domain}",
+        domain=domain,
+        credential_file=str(target),
+        exists=exists,
+        mode=mode,
+    )
+
+
+@db_app.command("backup")
+def backup(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    database: str = typer.Option(..., "--database", help="Database name."),
+    credential_file: Path | None = typer.Option(
+        None,
+        "--credential-file",
+        help="Credential file path.",
+        dir_okay=False,
+    ),
+    target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
+    apply: bool = typer.Option(False, "--apply", help="Apply backup operation."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    backup_dir = target_dir or default_backup_dir(Path(app_ctx.config.state_path), domain)
+    backup_file = backup_dir / backup_filename(domain)
+    secret_file = _resolve_credential_path(app_ctx, domain, credential_file)
+
+    try:
+        command_preview = build_backup_command(
+            backup_file=backup_file,
+            database=database,
+            credential_file=secret_file,
+        )
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    app_ctx.emit_output(
+        "ok",
+        f"DB backup plan prepared for {domain}",
+        domain=domain,
+        backup_file=str(backup_file),
+        credential_file=str(secret_file),
+        command=command_preview,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
     backup_dir.mkdir(parents=True, exist_ok=True)
     command = build_backup_command(
         backup_file=backup_file,
         database=database,
-        user=user,
-        password=password,
-        host=host,
-        port=port,
+        credential_file=secret_file,
     )
 
     try:
@@ -105,23 +193,22 @@ def restore(
     domain: str = typer.Argument(..., help="Application domain."),
     backup_file: Path = typer.Option(..., "--backup-file", help="Backup file path.", dir_okay=False),
     database: str = typer.Option(..., "--database", help="Database name."),
-    user: str = typer.Option(..., "--user", help="Database user."),
-    password_env: str = typer.Option("LAROPS_DB_PASSWORD", "--password-env", help="Password env var name."),
-    host: str = typer.Option("127.0.0.1", "--host", help="Database host."),
-    port: int = typer.Option(3306, "--port", help="Database port."),
+    credential_file: Path | None = typer.Option(
+        None,
+        "--credential-file",
+        help="Credential file path.",
+        dir_okay=False,
+    ),
     apply: bool = typer.Option(False, "--apply", help="Apply restore operation."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    password = os.getenv(password_env, "")
+    secret_file = _resolve_credential_path(app_ctx, domain, credential_file)
 
     try:
         preview = build_restore_command(
             backup_file=backup_file,
             database=database,
-            user=user,
-            password="***",
-            host=host,
-            port=port,
+            credential_file=secret_file,
         )
     except DbServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -132,6 +219,7 @@ def restore(
         f"DB restore plan prepared for {domain}",
         domain=domain,
         backup_file=str(backup_file),
+        credential_file=str(secret_file),
         command=preview,
         apply=apply,
         dry_run=app_ctx.dry_run,
@@ -139,17 +227,11 @@ def restore(
     if app_ctx.dry_run or not apply:
         app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
         return
-    if not password:
-        app_ctx.emit_output("error", f"Password env var is empty: {password_env}")
-        raise typer.Exit(code=2)
 
     command = build_restore_command(
         backup_file=backup_file,
         database=database,
-        user=user,
-        password=password,
-        host=host,
-        port=port,
+        credential_file=secret_file,
     )
     try:
         with CommandLock("db-restore"):

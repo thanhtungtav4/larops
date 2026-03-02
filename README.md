@@ -22,6 +22,13 @@ curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/i
 larops bootstrap init --apply
 ```
 
+Install pinned release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
+  sudo LAROPS_VERSION=0.1.0 bash
+```
+
 Optional app bootstrap in one go:
 
 ```bash
@@ -51,6 +58,17 @@ deploy:
 events:
   sink: jsonl
   path: /tmp/larops-events.jsonl
+systemd:
+  manage: false
+  unit_dir: /tmp/larops-systemd
+  user: www-data
+notifications:
+  telegram:
+    enabled: true
+    bot_token: "123456:BOT_TOKEN"
+    chat_id: "-1001234567890"
+    min_severity: error
+    batch_size: 20
 YAML
 
 larops --config /tmp/larops.yaml app create demo.test --apply
@@ -58,12 +76,25 @@ larops --config /tmp/larops.yaml app deploy demo.test --source . --apply
 larops --config /tmp/larops.yaml app rollback demo.test --to previous --apply
 larops --config /tmp/larops.yaml --json app info demo.test
 
+# Runtime process control (systemd real mode when systemd.manage=true)
 larops --config /tmp/larops.yaml worker enable demo.test --queue default --concurrency 2 --apply
 larops --config /tmp/larops.yaml scheduler enable demo.test --apply
 larops --config /tmp/larops.yaml horizon enable demo.test --apply
 larops --config /tmp/larops.yaml --json worker status demo.test
+
+# SSL lifecycle
 larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
+
+# DB credential + backup/restore
+export LAROPS_DB_PASSWORD="strong-password"
+larops --config /tmp/larops.yaml db credential set demo.test --user appuser --apply
+larops --config /tmp/larops.yaml db backup demo.test --database appdb --apply
 larops --config /tmp/larops.yaml db list-backups demo.test
+
+# Telegram adapter from event stream
+larops --config /tmp/larops.yaml notify telegram run-once --apply
+
+# Health checks
 larops --config /tmp/larops.yaml --json doctor run demo.test
 ```
 
@@ -79,3 +110,16 @@ docker compose run --rm larops-cli
 
 Direct install script is in `scripts/install.sh`.  
 It installs dependencies, clones/updates source, installs LarOps into a venv, links `/usr/local/bin/larops`, and seeds `/etc/larops/larops.yaml`.
+
+## Release Flow
+
+1. Ensure clean git tree.
+2. Run `scripts/release.sh <semver>` (for example `scripts/release.sh 0.2.0`).
+3. Push release commit and tag:
+
+```bash
+git push origin main
+git push origin v0.2.0
+```
+
+4. Install pinned release on server by setting `LAROPS_VERSION`.

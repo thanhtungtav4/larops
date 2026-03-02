@@ -19,6 +19,10 @@ def write_config(tmp_path: Path) -> Path:
                 f"  releases_path: {tmp_path / 'apps'}",
                 "  keep_releases: 5",
                 "  health_check_path: /up",
+                "systemd:",
+                "  manage: false",
+                f"  unit_dir: {tmp_path / 'units'}",
+                "  user: www-data",
                 "events:",
                 "  sink: jsonl",
                 f"  path: {tmp_path / 'events.jsonl'}",
@@ -158,4 +162,3 @@ def test_runtime_enable_requires_deployed_app(tmp_path: Path) -> None:
     )
     assert worker_enable.exit_code == 2
     assert "Deploy app before enabling worker" in worker_enable.stdout
-

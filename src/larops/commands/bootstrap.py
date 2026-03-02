@@ -34,6 +34,11 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
             "keep_releases": app_ctx.config.deploy.keep_releases,
             "health_check_path": app_ctx.config.deploy.health_check_path,
         },
+        "systemd": {
+            "manage": app_ctx.config.systemd.manage,
+            "unit_dir": app_ctx.config.systemd.unit_dir,
+            "user": app_ctx.config.systemd.user,
+        },
         "events": {
             "sink": app_ctx.config.events.sink,
             "path": app_ctx.config.events.path,
@@ -43,6 +48,8 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
                 "enabled": app_ctx.config.notifications.telegram.enabled,
                 "bot_token": app_ctx.config.notifications.telegram.bot_token,
                 "chat_id": app_ctx.config.notifications.telegram.chat_id,
+                "min_severity": app_ctx.config.notifications.telegram.min_severity,
+                "batch_size": app_ctx.config.notifications.telegram.batch_size,
             }
         },
     }
@@ -192,4 +199,3 @@ def init(
         )
     )
     app_ctx.emit_output("ok", "Bootstrap init completed.")
-

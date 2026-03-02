@@ -4,6 +4,7 @@ set -euo pipefail
 LAROPS_REPO_URL="${LAROPS_REPO_URL:-https://github.com/thanhtungtav4/larops.git}"
 LAROPS_INSTALL_DIR="${LAROPS_INSTALL_DIR:-/opt/larops}"
 LAROPS_CONFIG_PATH="${LAROPS_CONFIG_PATH:-/etc/larops/larops.yaml}"
+LAROPS_VERSION="${LAROPS_VERSION:-latest}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "[larops-install] Please run as root."
@@ -18,12 +19,23 @@ apt-get install -y git curl ca-certificates python3 python3-venv python3-pip
 if [[ -d "${LAROPS_INSTALL_DIR}/.git" ]]; then
   echo "[larops-install] Existing install found, pulling latest source..."
   git -C "${LAROPS_INSTALL_DIR}" fetch --all --prune
-  git -C "${LAROPS_INSTALL_DIR}" checkout main
-  git -C "${LAROPS_INSTALL_DIR}" pull --ff-only
 else
   echo "[larops-install] Cloning source from ${LAROPS_REPO_URL}..."
   rm -rf "${LAROPS_INSTALL_DIR}"
   git clone "${LAROPS_REPO_URL}" "${LAROPS_INSTALL_DIR}"
+fi
+
+if [[ "${LAROPS_VERSION}" == "latest" ]]; then
+  echo "[larops-install] Using latest main branch..."
+  git -C "${LAROPS_INSTALL_DIR}" checkout main
+  git -C "${LAROPS_INSTALL_DIR}" pull --ff-only
+else
+  tag="${LAROPS_VERSION}"
+  if [[ "${tag}" != v* ]]; then
+    tag="v${tag}"
+  fi
+  echo "[larops-install] Using pinned version ${tag}..."
+  git -C "${LAROPS_INSTALL_DIR}" checkout "${tag}"
 fi
 
 echo "[larops-install] Setting up Python virtual environment..."
@@ -42,4 +54,3 @@ fi
 echo "[larops-install] Done."
 echo "[larops-install] Next step (WordOps-style full bootstrap):"
 echo "  larops bootstrap init --apply"
-
