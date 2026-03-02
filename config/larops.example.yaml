@@ -1,4 +1,5 @@
 environment: production
+state_path: .larops/state
 
 deploy:
   releases_path: /var/www
@@ -14,4 +15,3 @@ notifications:
     enabled: false
     bot_token: ""
     chat_id: ""
-

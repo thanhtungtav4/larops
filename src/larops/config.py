@@ -30,6 +30,7 @@ class NotificationsConfig(BaseModel):
 
 class AppConfig(BaseModel):
     environment: str = "production"
+    state_path: str = ".larops/state"
     deploy: DeployConfig = Field(default_factory=DeployConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)

@@ -1,0 +1,106 @@
+import json
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from larops.cli import app
+
+runner = CliRunner()
+
+
+def write_config(tmp_path: Path, keep_releases: int = 5) -> Path:
+    config_file = tmp_path / "larops.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                f"  keep_releases: {keep_releases}",
+                "  health_check_path: /up",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_file
+
+
+def make_source(tmp_path: Path, name: str, content: str) -> Path:
+    source = tmp_path / name
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "README.txt").write_text(content, encoding="utf-8")
+    return source
+
+
+def test_app_create_apply_creates_structure(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert result.exit_code == 0
+
+    app_root = tmp_path / "apps" / "demo.test"
+    assert (app_root / "releases").exists()
+    assert (app_root / "shared").exists()
+    metadata = tmp_path / "state" / "apps" / "demo.test.json"
+    assert metadata.exists()
+
+
+def test_app_deploy_and_rollback_cycle(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    source_one = make_source(tmp_path, "src-one", "release-one")
+    source_two = make_source(tmp_path, "src-two", "release-two")
+
+    create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+
+    deploy_one = runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source_one), "--apply"],
+    )
+    assert deploy_one.exit_code == 0
+
+    deploy_two = runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source_two), "--apply"],
+    )
+    assert deploy_two.exit_code == 0
+
+    info_before = runner.invoke(app, ["--config", str(config), "--json", "app", "info", "demo.test"])
+    assert info_before.exit_code == 0
+    info_payload = json.loads(info_before.stdout.strip())
+    current_release = info_payload["current_release"]
+    assert current_release is not None
+    assert info_payload["releases_count"] == 2
+
+    rollback = runner.invoke(
+        app,
+        ["--config", str(config), "app", "rollback", "demo.test", "--to", "previous", "--apply"],
+    )
+    assert rollback.exit_code == 0
+
+    info_after = runner.invoke(app, ["--config", str(config), "--json", "app", "info", "demo.test"])
+    assert info_after.exit_code == 0
+    info_after_payload = json.loads(info_after.stdout.strip())
+    assert info_after_payload["current_release"] != current_release
+
+
+def test_deploy_prunes_old_releases(tmp_path: Path) -> None:
+    config = write_config(tmp_path, keep_releases=2)
+    create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+
+    for index in range(3):
+        source = make_source(tmp_path, f"src-{index}", f"release-{index}")
+        deploy = runner.invoke(
+            app,
+            ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source), "--apply"],
+        )
+        assert deploy.exit_code == 0
+
+    info = runner.invoke(app, ["--config", str(config), "--json", "app", "info", "demo.test"])
+    payload = json.loads(info.stdout.strip())
+    assert payload["releases_count"] == 2
+
