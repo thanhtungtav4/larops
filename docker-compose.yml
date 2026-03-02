@@ -1,0 +1,15 @@
+services:
+  larops-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    command: ["pytest", "-q"]
+
+  larops-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    command: ["larops", "--json", "stack", "install", "--web"]
+
