@@ -13,7 +13,7 @@ LarOps standardizes Laravel infrastructure operations:
 
 ## Current Stage
 
-S5 foundation: WordOps-style bootstrap flow, app lifecycle, runtime process controls, SSL lifecycle, DB backup/restore, and doctor checks.
+S6 foundation: WordOps-style bootstrap flow, app lifecycle, runtime process controls, SSL lifecycle, DB backup/restore, release flow, and Telegram event-stream adapter (including systemd daemon mode).
 
 ## Empty Server One-Liner
 
@@ -65,8 +65,10 @@ systemd:
 notifications:
   telegram:
     enabled: true
-    bot_token: "123456:BOT_TOKEN"
-    chat_id: "-1001234567890"
+    bot_token: ""
+    bot_token_file: /etc/larops/secrets/telegram_bot_token
+    chat_id: ""
+    chat_id_file: /etc/larops/secrets/telegram_chat_id
     min_severity: error
     batch_size: 20
 YAML
@@ -93,9 +95,39 @@ larops --config /tmp/larops.yaml db list-backups demo.test
 
 # Telegram adapter from event stream
 larops --config /tmp/larops.yaml notify telegram run-once --apply
+larops --config /tmp/larops.yaml notify telegram daemon enable --apply
 
 # Health checks
 larops --config /tmp/larops.yaml --json doctor run demo.test
+```
+
+## Telegram Secrets and Daemon Mode
+
+Create secret files:
+
+```bash
+sudo install -d -m 700 /etc/larops/secrets
+echo "123456:BOT_TOKEN" | sudo tee /etc/larops/secrets/telegram_bot_token >/dev/null
+echo "-1001234567890" | sudo tee /etc/larops/secrets/telegram_chat_id >/dev/null
+sudo chmod 600 /etc/larops/secrets/telegram_bot_token /etc/larops/secrets/telegram_chat_id
+```
+
+Optional env file for daemon (used by systemd unit):
+
+```bash
+sudo tee /etc/larops/telegram.env >/dev/null <<'ENV'
+LAROPS_TELEGRAM_ENABLED=true
+LAROPS_TELEGRAM_BOT_TOKEN_FILE=/etc/larops/secrets/telegram_bot_token
+LAROPS_TELEGRAM_CHAT_ID_FILE=/etc/larops/secrets/telegram_chat_id
+ENV
+sudo chmod 600 /etc/larops/telegram.env
+```
+
+Enable/inspect daemon:
+
+```bash
+larops --config /etc/larops/larops.yaml notify telegram daemon enable --apply
+larops --config /etc/larops/larops.yaml notify telegram daemon status
 ```
 
 ## Docker Test
@@ -123,3 +155,7 @@ git push origin v0.2.0
 ```
 
 4. Install pinned release on server by setting `LAROPS_VERSION`.
+
+## Production Runbook
+
+Detailed production runbook: [docs/PRODUCTION_RUNBOOK.md](/Volumes/Manager%20Data/Tool/larops/docs/PRODUCTION_RUNBOOK.md)

@@ -47,7 +47,9 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
             "telegram": {
                 "enabled": app_ctx.config.notifications.telegram.enabled,
                 "bot_token": app_ctx.config.notifications.telegram.bot_token,
+                "bot_token_file": app_ctx.config.notifications.telegram.bot_token_file,
                 "chat_id": app_ctx.config.notifications.telegram.chat_id,
+                "chat_id_file": app_ctx.config.notifications.telegram.chat_id_file,
                 "min_severity": app_ctx.config.notifications.telegram.min_severity,
                 "batch_size": app_ctx.config.notifications.telegram.batch_size,
             }

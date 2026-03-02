@@ -19,6 +19,8 @@ notifications:
   telegram:
     enabled: false
     bot_token: ""
+    bot_token_file: "/etc/larops/secrets/telegram_bot_token"
     chat_id: ""
+    chat_id_file: "/etc/larops/secrets/telegram_chat_id"
     min_severity: error
     batch_size: 20

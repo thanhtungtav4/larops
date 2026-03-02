@@ -9,6 +9,7 @@ from larops.core.events import EventEmitter
 @dataclass(slots=True)
 class AppContext:
     config: AppConfig
+    config_path: Path | None
     json_output: bool
     dry_run: bool
     verbose: bool
@@ -28,6 +29,7 @@ class AppContext:
     def from_config(
         cls,
         config: AppConfig,
+        config_path: Path | None,
         *,
         json_output: bool,
         dry_run: bool,
@@ -35,9 +37,9 @@ class AppContext:
     ) -> "AppContext":
         return cls(
             config=config,
+            config_path=config_path,
             json_output=json_output,
             dry_run=dry_run,
             verbose=verbose,
             event_emitter=EventEmitter(Path(config.events.path)),
         )
-

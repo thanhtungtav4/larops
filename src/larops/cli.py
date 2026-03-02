@@ -51,6 +51,7 @@ def main(
     loaded = load_config(config)
     ctx.obj = AppContext.from_config(
         loaded,
+        config_path=config,
         json_output=json_output,
         dry_run=dry_run,
         verbose=verbose,
