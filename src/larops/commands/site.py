@@ -10,6 +10,7 @@ from larops.commands.create import create_site, manage_site_runtime
 from larops.core.locks import CommandLock, CommandLockError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.permissions_service import PermissionServiceError, reassign_site_permissions
 from larops.services.runtime_process import RuntimeProcessError
 from larops.services.site_delete import SiteDeleteError, create_delete_checkpoint, default_checkpoint_dir, purge_site
 
@@ -21,6 +22,10 @@ site_app.add_typer(runtime_app, name="runtime")
 
 def _delete_lock_name(domain: str) -> str:
     return f"site-delete-{re.sub(r'[^a-zA-Z0-9]+', '-', domain)}"
+
+
+def _permissions_lock_name(domain: str) -> str:
+    return f"site-permissions-{re.sub(r'[^a-zA-Z0-9]+', '-', domain)}"
 
 
 def _emit(
@@ -42,6 +47,87 @@ def _emit(
             metadata=metadata or {},
         )
     )
+
+
+@site_app.command("permissions")
+def site_permissions(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Site domain."),
+    owner: str | None = typer.Option(None, "--owner", help="Owner user for chown (must pair with --group)."),
+    group: str | None = typer.Option(None, "--group", help="Owner group for chown (must pair with --owner)."),
+    dir_mode: str = typer.Option("755", "--dir-mode", help="Directory mode in octal."),
+    file_mode: str = typer.Option("644", "--file-mode", help="File mode in octal."),
+    writable_mode: str = typer.Option("775", "--writable-mode", help="Writable path mode in octal."),
+    writable: list[str] = typer.Option(
+        [],
+        "--writable",
+        help="Writable subpaths relative to app root. Repeat flag for multiple paths.",
+    ),
+    apply: bool = typer.Option(False, "--apply", "-a", help="Apply permission changes."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    app_root = Path(app_ctx.config.deploy.releases_path) / domain
+    app_ctx.emit_output(
+        "ok",
+        f"Site permissions plan prepared for {domain}",
+        domain=domain,
+        app_root=str(app_root),
+        owner=owner,
+        group=group,
+        dir_mode=dir_mode,
+        file_mode=file_mode,
+        writable_mode=writable_mode,
+        writable=writable,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    _emit(
+        app_ctx,
+        severity="info",
+        event_type="site.permissions.started",
+        domain=domain,
+        message="Site permissions update started.",
+    )
+    try:
+        with CommandLock(_permissions_lock_name(domain)):
+            result = reassign_site_permissions(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                state_path=Path(app_ctx.config.state_path),
+                domain=domain,
+                owner=owner,
+                group=group,
+                dir_mode_raw=dir_mode,
+                file_mode_raw=file_mode,
+                writable_mode_raw=writable_mode,
+                writable_paths=writable,
+            )
+    except CommandLockError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=5) from exc
+    except (PermissionServiceError, RuntimeProcessError) as exc:
+        _emit(
+            app_ctx,
+            severity="error",
+            event_type="site.permissions.failed",
+            domain=domain,
+            message="Site permissions update failed.",
+            metadata={"error": str(exc)},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    _emit(
+        app_ctx,
+        severity="info",
+        event_type="site.permissions.completed",
+        domain=domain,
+        message="Site permissions update completed.",
+    )
+    app_ctx.emit_output("ok", f"Site permissions updated for {domain}", result=result)
 
 
 @runtime_app.command("enable")

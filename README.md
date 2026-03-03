@@ -49,7 +49,11 @@ larops site runtime enable example.com -w -s -a
 larops site runtime status example.com
 larops site runtime disable example.com -a
 
-# 3) Safe delete (checkpoint + guard)
+# 3) Re-assign permissions (Laravel-friendly defaults)
+larops site permissions example.com --apply
+larops site permissions example.com --owner www-data --group www-data --apply
+
+# 4) Safe delete (checkpoint + guard)
 larops site delete example.com --purge --confirm example.com --apply
 ```
 
@@ -129,6 +133,7 @@ larops --config /tmp/larops.yaml site create demo.test -w -s -a
 larops --config /tmp/larops.yaml site runtime disable demo.test -a
 larops --config /tmp/larops.yaml site runtime enable demo.test -w -s -a
 larops --config /tmp/larops.yaml site runtime status demo.test
+larops --config /tmp/larops.yaml site permissions demo.test --apply
 larops --config /tmp/larops.yaml site delete demo.test --purge --confirm demo.test --apply
 
 # SSL lifecycle
@@ -167,6 +172,13 @@ Each process (`worker`, `scheduler`, `horizon`) supports:
 - `window_seconds`: time window for restart counting
 - `cooldown_seconds`: block restart until cooldown passes after threshold hit
 - `auto_heal`: when `status` detects failed service, LarOps attempts restart within policy limits
+
+## Permission Reset
+
+- Command: `larops site permissions <domain> --apply`
+- Default modes: `dir=755`, `file=644`, `writable=775`
+- Default writable paths: `shared/storage`, `shared/bootstrap`, `current/storage`, `current/bootstrap/cache`
+- Optional ownership reset: use both `--owner` and `--group`
 
 ## Telegram Secrets and Daemon Mode
 
