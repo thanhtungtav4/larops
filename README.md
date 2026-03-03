@@ -264,8 +264,21 @@ larops site permissions example.com \
 
 ```bash
 larops ssl issue example.com --challenge http
+larops ssl auto-renew enable --apply
+larops ssl auto-renew status
 larops ssl renew
 larops ssl check example.com
+```
+
+Auto-renew notes:
+
+- Uses systemd timer/service units: `larops-ssl-renew.timer` and `larops-ssl-renew.service`
+- Default schedule: `*-*-* 03,15:00:00`
+- Default deploy hook: `systemctl reload nginx`
+- Customize schedule:
+
+```bash
+larops ssl auto-renew enable --on-calendar \"*-*-* 01:30:00\" --randomized-delay 900 --apply
 ```
 
 ### 6. DB backup/restore
@@ -374,6 +387,14 @@ Runtime direct:
 larops worker status example.com
 larops scheduler run-once example.com --apply
 larops horizon terminate example.com --apply
+```
+
+SSL:
+
+```bash
+larops ssl auto-renew enable --apply
+larops ssl auto-renew disable --apply
+larops ssl auto-renew status
 ```
 
 Database:

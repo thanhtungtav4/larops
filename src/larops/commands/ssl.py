@@ -9,6 +9,12 @@ from larops.core.locks import CommandLock, CommandLockError
 from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.ssl_auto_renew import (
+    SslAutoRenewError,
+    disable_ssl_auto_renew,
+    enable_ssl_auto_renew,
+    status_ssl_auto_renew,
+)
 from larops.services.ssl_service import (
     SslServiceError,
     build_issue_command,
@@ -20,6 +26,8 @@ from larops.services.ssl_service import (
 )
 
 ssl_app = typer.Typer(help="Manage SSL certificate lifecycle.")
+auto_renew_app = typer.Typer(help="Manage SSL auto-renew timer.")
+ssl_app.add_typer(auto_renew_app, name="auto-renew")
 
 
 def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, metadata: dict | None = None) -> None:
@@ -32,6 +40,126 @@ def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, met
             metadata=metadata or {},
         )
     )
+
+
+@auto_renew_app.command("enable")
+def auto_renew_enable(
+    ctx: typer.Context,
+    on_calendar: str = typer.Option(
+        "*-*-* 03,15:00:00",
+        "--on-calendar",
+        help="systemd OnCalendar expression for renew schedule.",
+    ),
+    randomized_delay: int = typer.Option(
+        1800,
+        "--randomized-delay",
+        help="RandomizedDelaySec value in seconds.",
+    ),
+    user: str = typer.Option("root", "--user", help="System user used by renew service."),
+    reload_command: str | None = typer.Option(
+        "systemctl reload nginx",
+        "--reload-command",
+        help="Optional certbot deploy-hook command after successful renewal.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply auto-renew setup."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    renew_command = build_renew_command(force=False, dry_run=False)
+    if reload_command:
+        renew_command.extend(["--deploy-hook", reload_command])
+
+    app_ctx.emit_output(
+        "ok",
+        "SSL auto-renew enable plan prepared.",
+        on_calendar=on_calendar,
+        randomized_delay=randomized_delay,
+        user=user,
+        reload_command=reload_command,
+        renew_command=renew_command,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock("ssl-auto-renew-enable"):
+            result = enable_ssl_auto_renew(
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                user=user,
+                on_calendar=on_calendar,
+                randomized_delay_seconds=randomized_delay,
+                renew_command=renew_command,
+            )
+    except (CommandLockError, SslAutoRenewError, ShellCommandError) as exc:
+        _emit(app_ctx, "error", "ssl.auto_renew.enable.failed", "SSL auto-renew enable failed.", {"error": str(exc)})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(
+        app_ctx,
+        "info",
+        "ssl.auto_renew.enable.completed",
+        "SSL auto-renew enable completed.",
+        {"on_calendar": on_calendar, "randomized_delay": randomized_delay},
+    )
+    app_ctx.emit_output("ok", "SSL auto-renew enabled.", auto_renew=result)
+
+
+@auto_renew_app.command("disable")
+def auto_renew_disable(
+    ctx: typer.Context,
+    remove_units: bool = typer.Option(
+        False,
+        "--remove-units",
+        help="Remove timer/service unit files after disable.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply auto-renew disable."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    app_ctx.emit_output(
+        "ok",
+        "SSL auto-renew disable plan prepared.",
+        remove_units=remove_units,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock("ssl-auto-renew-disable"):
+            result = disable_ssl_auto_renew(
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                remove_units=remove_units,
+            )
+    except (CommandLockError, SslAutoRenewError, ShellCommandError) as exc:
+        _emit(app_ctx, "error", "ssl.auto_renew.disable.failed", "SSL auto-renew disable failed.", {"error": str(exc)})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(
+        app_ctx,
+        "info",
+        "ssl.auto_renew.disable.completed",
+        "SSL auto-renew disable completed.",
+        {"remove_units": remove_units},
+    )
+    app_ctx.emit_output("ok", "SSL auto-renew disabled.", auto_renew=result)
+
+
+@auto_renew_app.command("status")
+def auto_renew_status(ctx: typer.Context) -> None:
+    app_ctx: AppContext = ctx.obj
+    result = status_ssl_auto_renew(
+        unit_dir=Path(app_ctx.config.systemd.unit_dir),
+        systemd_manage=app_ctx.config.systemd.manage,
+    )
+    app_ctx.emit_output("ok", "SSL auto-renew status.", auto_renew=result)
 
 
 @ssl_app.command("issue")
@@ -145,4 +273,3 @@ def check(
         not_after=info.not_after.isoformat(),
         days_remaining=info.days_remaining,
     )
-

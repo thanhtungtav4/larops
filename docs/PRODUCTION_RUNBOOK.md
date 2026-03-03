@@ -81,6 +81,7 @@ Or short command (create + deploy):
 ```bash
 sudo larops --config /etc/larops/larops.yaml create site example.com --apply
 sudo larops --config /etc/larops/larops.yaml create site example.com -le --le-email ops@example.com --apply
+sudo larops --config /etc/larops/larops.yaml ssl auto-renew enable --apply
 sudo larops --config /etc/larops/larops.yaml site create example.com -a
 sudo larops --config /etc/larops/larops.yaml site runtime disable example.com -a
 sudo larops --config /etc/larops/larops.yaml site runtime status example.com
@@ -92,6 +93,12 @@ Enable runtime:
 sudo larops --config /etc/larops/larops.yaml worker enable example.com --queue default --concurrency 2 --apply
 sudo larops --config /etc/larops/larops.yaml scheduler enable example.com --apply
 sudo larops --config /etc/larops/larops.yaml horizon enable example.com --apply
+```
+
+Check auto-renew timer status:
+
+```bash
+sudo larops --config /etc/larops/larops.yaml ssl auto-renew status
 ```
 
 ## 6) DB credential + backup
