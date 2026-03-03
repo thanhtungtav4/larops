@@ -136,14 +136,79 @@ Smoke test:
 sudo larops --config /etc/larops/larops.yaml notify telegram test --apply
 ```
 
-## 8) Health checks
+## 8) Security monitor profiles (scan + FIM timers)
+
+Initialize baseline once (required before FIM timer):
+
+```bash
+sudo larops --config /etc/larops/larops.yaml monitor fim init \
+  --root /var/www/example.com/current \
+  --baseline-file /var/lib/larops/state/security/fim_baseline.json \
+  --apply
+```
+
+Profile A - Small VPS (lower load):
+
+```bash
+# Scan every 2 minutes
+sudo larops --config /etc/larops/larops.yaml monitor scan timer enable \
+  --on-calendar "*-*-* *:0/2:00" \
+  --randomized-delay 15 \
+  --threshold-hits 8 \
+  --max-lines 5000 \
+  --top 10 \
+  --apply
+
+# FIM every 30 minutes
+sudo larops --config /etc/larops/larops.yaml monitor fim timer enable \
+  --on-calendar "*-*-* *:0/30:00" \
+  --randomized-delay 120 \
+  --baseline-file /var/lib/larops/state/security/fim_baseline.json \
+  --apply
+```
+
+Profile B - High traffic (higher frequency):
+
+```bash
+# Scan every 1 minute with larger window
+sudo larops --config /etc/larops/larops.yaml monitor scan timer enable \
+  --on-calendar "*-*-* *:*:00" \
+  --randomized-delay 5 \
+  --threshold-hits 20 \
+  --max-lines 20000 \
+  --top 20 \
+  --apply
+
+# FIM every 10 minutes
+sudo larops --config /etc/larops/larops.yaml monitor fim timer enable \
+  --on-calendar "*-*-* *:0/10:00" \
+  --randomized-delay 60 \
+  --baseline-file /var/lib/larops/state/security/fim_baseline.json \
+  --apply
+```
+
+Check timer status:
+
+```bash
+sudo larops --config /etc/larops/larops.yaml monitor scan timer status
+sudo larops --config /etc/larops/larops.yaml monitor fim timer status
+```
+
+Review security report with time window:
+
+```bash
+sudo larops --config /etc/larops/larops.yaml security report --since 1h
+sudo larops --config /etc/larops/larops.yaml security report --since 24h
+```
+
+## 9) Health checks
 
 ```bash
 sudo larops --config /etc/larops/larops.yaml doctor quick host
 sudo larops --config /etc/larops/larops.yaml doctor run example.com
 ```
 
-## 9) Release update procedure
+## 10) Release update procedure
 
 ```bash
 git pull

@@ -43,6 +43,8 @@ Main goals:
 - SSL lifecycle (`ssl issue`, `ssl renew`, `ssl check`).
 - Database backup/restore and credentials (`db backup`, `db restore`, `db credential`).
 - Event-stream based notifications (`notify telegram run-once/watch/daemon`).
+- Security baseline controls (`security install/status/report`, `alert set/test`).
+- Monitor controls (`monitor scan run`, `monitor fim init/run`).
 - Health checks (`doctor run`, `doctor quick`).
 - Runtime protection with restart policy matrix and auto-heal.
 
@@ -441,7 +443,33 @@ Notifications:
 larops notify telegram run-once --apply
 larops notify telegram daemon enable --apply
 larops notify telegram daemon status
+larops alert set --telegram-token "<token>" --telegram-chat-id "<chat-id>" --apply
+larops alert test --apply
 ```
+
+Security baseline:
+
+```bash
+larops security install --apply
+larops security status
+larops security report
+larops security report --since 24h
+```
+
+Monitor:
+
+```bash
+larops monitor scan run --apply
+larops monitor fim init --root /var/www/example.com/current --apply
+larops monitor fim run --apply
+larops monitor scan timer enable --on-calendar "*-*-* *:*:00" --apply
+larops monitor fim timer enable --on-calendar "*-*-* *:15:00" --apply
+```
+
+Default profile suggestions:
+
+- Small VPS: scan `*-*-* *:0/2:00`, fim `*-*-* *:0/30:00`
+- High traffic: scan `*-*-* *:*:00`, fim `*-*-* *:0/10:00`
 
 ## Telegram Notifications
 

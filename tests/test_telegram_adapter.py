@@ -84,3 +84,38 @@ def test_dispatch_once_plan_mode_marks_as_seen(tmp_path: Path) -> None:
     assert report["delivered"] == 1
     assert called["count"] == 0
 
+
+def test_dispatch_once_accepts_warning_alias(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    state_file = tmp_path / "telegram_state.json"
+    events_path.write_text(
+        json.dumps(
+            {
+                "event_id": "evt-4",
+                "severity": "warning",
+                "event_type": "security.install.started",
+                "host": "node-c",
+                "message": "security started",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    sent: list[str] = []
+
+    def fake_sender(_token: str, _chat_id: str, text: str) -> None:
+        sent.append(text)
+
+    config = TelegramAdapterConfig(
+        events_path=events_path,
+        state_file=state_file,
+        bot_token="token",
+        chat_id="chat",
+        min_severity="warn",
+        batch_size=10,
+    )
+    report = dispatch_once(config, sender=fake_sender, apply=True)
+    assert report["delivered"] == 1
+    assert sent
+    assert "[WARN]" in sent[0]

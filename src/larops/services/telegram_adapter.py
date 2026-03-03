@@ -16,6 +16,13 @@ class TelegramAdapterError(RuntimeError):
 SEVERITY_ORDER = {"info": 0, "warn": 1, "error": 2, "critical": 3}
 
 
+def _normalize_severity(raw: str) -> str:
+    normalized = raw.strip().lower()
+    if normalized == "warning":
+        return "warn"
+    return normalized
+
+
 @dataclass(slots=True)
 class TelegramAdapterConfig:
     events_path: Path
@@ -43,12 +50,13 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def _severity_allowed(event: dict, min_severity: str) -> bool:
-    event_severity = str(event.get("severity", "info")).lower()
-    return SEVERITY_ORDER.get(event_severity, 0) >= SEVERITY_ORDER.get(min_severity.lower(), 2)
+    event_severity = _normalize_severity(str(event.get("severity", "info")))
+    normalized_min = _normalize_severity(min_severity)
+    return SEVERITY_ORDER.get(event_severity, 0) >= SEVERITY_ORDER.get(normalized_min, 2)
 
 
 def _format_message(event: dict) -> str:
-    severity = str(event.get("severity", "info")).upper()
+    severity = _normalize_severity(str(event.get("severity", "info"))).upper()
     event_type = str(event.get("event_type", "unknown"))
     host = str(event.get("host", "unknown-host"))
     app = event.get("app")
@@ -173,4 +181,3 @@ def watch(
             break
         time.sleep(max(1, interval_seconds))
     return reports
-
