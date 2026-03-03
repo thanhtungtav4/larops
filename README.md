@@ -65,8 +65,10 @@ Development requirements:
 ### Empty server one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
+  sudo LAROPS_VERSION=0.1.0 bash
 larops bootstrap init --apply
+larops create site example.com --apply
 ```
 
 Install pinned version:
@@ -74,6 +76,13 @@ Install pinned version:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
   sudo LAROPS_VERSION=0.1.0 bash
+```
+
+Allow unpinned latest/main explicitly (not recommended for production):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
+  sudo LAROPS_VERSION=latest LAROPS_ALLOW_UNPINNED=true bash
 ```
 
 ### Local development
@@ -207,6 +216,10 @@ larops create site example.com --apply
 larops site create example.com --apply
 ```
 
+Default source behavior:
+
+- If `--source` is omitted, LarOps deploys from `deploy.source_base_path/<domain>`.
+
 With profile preset and cache preset:
 
 ```bash
@@ -263,10 +276,10 @@ larops site permissions example.com \
 ### 5. SSL lifecycle
 
 ```bash
-larops ssl issue example.com --challenge http
+larops ssl issue example.com --challenge http --apply
 larops ssl auto-renew enable --apply
 larops ssl auto-renew status
-larops ssl renew
+larops ssl renew --apply
 larops ssl check example.com
 ```
 
@@ -278,7 +291,13 @@ Auto-renew notes:
 - Customize schedule:
 
 ```bash
-larops ssl auto-renew enable --on-calendar \"*-*-* 01:30:00\" --randomized-delay 900 --apply
+larops ssl auto-renew enable --on-calendar "*-*-* 01:30:00" --randomized-delay 900 --apply
+```
+
+Disable and remove unit files:
+
+```bash
+larops ssl auto-renew disable --remove-units --apply
 ```
 
 ### 6. DB backup/restore
@@ -289,6 +308,15 @@ larops db credential set example.com --user appuser --apply
 larops db backup example.com --database appdb --apply
 larops db list-backups example.com
 larops db restore example.com --backup-file /path/backup.sql.gz --database appdb --apply
+```
+
+PostgreSQL example:
+
+```bash
+export LAROPS_DB_PASSWORD="strong-password"
+larops db credential set example.com --engine postgres --user appuser --apply
+larops db backup example.com --engine postgres --database appdb --apply
+larops db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
 
 ### 7. Health checks
@@ -315,6 +343,7 @@ Delete behavior:
 - Requires `--purge`.
 - Requires `--confirm <domain>` unless `--no-prompt`.
 - Creates checkpoint archive by default before purge.
+- Checkpoint excludes secret files by default; use `--checkpoint-include-secrets` only when needed.
 
 ## Site Profile Presets
 
@@ -402,6 +431,7 @@ Database:
 ```bash
 larops db credential show example.com
 larops db backup example.com --database appdb --apply
+larops db backup example.com --engine postgres --database appdb --apply
 larops db list-backups example.com
 ```
 
@@ -443,6 +473,15 @@ docker compose run --rm larops-test
 docker compose run --rm larops-cli
 ```
 
+Run DB integration tests (requires reachable MySQL/PostgreSQL instances):
+
+```bash
+LAROPS_RUN_DB_INTEGRATION=1 \
+MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 MYSQL_USER=root MYSQL_PASSWORD=rootpass \
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgrespass \
+pytest -q tests/integration/test_db_engine_integration.py
+```
+
 ## GitHub CI/CD
 
 Workflow files:
@@ -459,6 +498,7 @@ CI (`ci.yml`) triggers:
 CI stages:
 
 - Ruff + Pytest on Python `3.11`, `3.12`, `3.13`
+- DB integration tests with real `mysql:8` and `postgres:16` services
 - Docker build + in-container tests + CLI smoke
 
 Release (`release.yml`) trigger:
@@ -472,8 +512,15 @@ Release stages:
   - `src/larops/__init__.py`
 - Run Ruff + Pytest
 - Build artifacts (`sdist` + `wheel`)
+- Build release assets:
+  - `dist/*`
+  - `larops-vX.Y.Z.tar.gz` source archive
+  - `SHA256SUMS`
+- Generate build provenance attestation for release assets
 - Create GitHub Release and upload:
   - `dist/*`
+  - `SHA256SUMS`
+  - `larops-vX.Y.Z.tar.gz`
   - `scripts/install.sh`
 
 Repository setting required for release job:
@@ -485,20 +532,20 @@ Repository setting required for release job:
 Use the included release script:
 
 ```bash
-scripts/release.sh 0.2.0
+scripts/release.sh <version>
 ```
 
 Script responsibilities:
 
 - Bump version in `pyproject.toml` and `src/larops/__init__.py`
 - Create changelog section in `CHANGELOG.md`
-- Create release commit and annotated tag (`v0.2.0`)
+- Create release commit and annotated tag (`v<version>`)
 
 Then push:
 
 ```bash
 git push origin main
-git push origin v0.2.0
+git push origin v<version>
 ```
 
 After tag push, GitHub release pipeline runs automatically.
@@ -510,6 +557,7 @@ After tag push, GitHub release pipeline runs automatically.
 - Prefer secret files over plain env for credentials/tokens.
 - Keep secret files permissioned as owner-only (`0600`).
 - Use `--atomic` on `site create` for rollback on failure path.
+- Prefer pinned installer (`LAROPS_VERSION=x.y.z`) with checksum verification.
 
 ## Troubleshooting
 
@@ -555,6 +603,31 @@ Fix:
 
 - Use `scripts/release.sh <semver>` to keep versions aligned.
 
+### SSL auto-renew timer exists but not active
+
+Root cause:
+
+- `systemd.manage` is disabled, or timer was not enabled after unit change.
+
+Fix:
+
+- Verify config and timer state:
+  - `larops ssl auto-renew status`
+- Re-enable timer:
+  - `larops ssl auto-renew enable --apply`
+
+### DB backup/restore fails due credential permission
+
+Root cause:
+
+- Credential file mode is not owner-only (`0600`).
+
+Fix:
+
+- Repair permission and retry:
+  - `chmod 600 /var/lib/larops/state/secrets/db/<domain>.cnf`
+  - `larops db backup <domain> --database <db> --apply`
+
 ## Repository Structure
 
 ```text
@@ -580,4 +653,4 @@ tests/
 
 Detailed production checklist and procedures:
 
-- [docs/PRODUCTION_RUNBOOK.md](/Volumes/Manager%20Data/Tool/larops/docs/PRODUCTION_RUNBOOK.md)
+- [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)

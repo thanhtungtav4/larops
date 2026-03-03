@@ -228,6 +228,11 @@ def site_delete(
         help="Custom checkpoint directory.",
         file_okay=False,
     ),
+    checkpoint_include_secrets: bool = typer.Option(
+        False,
+        "--checkpoint-include-secrets/--checkpoint-no-secrets",
+        help="Include secret files (for example DB credential) in checkpoint archive.",
+    ),
     confirm: str | None = typer.Option(
         None,
         "--confirm",
@@ -258,6 +263,7 @@ def site_delete(
         purge=purge,
         checkpoint=checkpoint,
         checkpoint_dir=str(checkpoint_root),
+        checkpoint_include_secrets=checkpoint_include_secrets,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -282,6 +288,7 @@ def site_delete(
                     state_path=state_path,
                     domain=domain,
                     checkpoint_dir=checkpoint_root,
+                    include_secrets=checkpoint_include_secrets,
                 )
                 checkpoint_file = str(checkpoint_path)
 

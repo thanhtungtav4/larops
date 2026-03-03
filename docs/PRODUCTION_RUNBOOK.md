@@ -112,6 +112,17 @@ sudo larops --config /etc/larops/larops.yaml db backup example.com --database ap
 sudo larops --config /etc/larops/larops.yaml db list-backups example.com
 ```
 
+PostgreSQL variant:
+
+```bash
+export LAROPS_DB_PASSWORD='strong-db-password'
+sudo --preserve-env=LAROPS_DB_PASSWORD larops --config /etc/larops/larops.yaml \
+  db credential set example.com --engine postgres --user appuser --host 127.0.0.1 --port 5432 --apply
+
+sudo larops --config /etc/larops/larops.yaml db backup example.com --engine postgres --database appdb --apply
+sudo larops --config /etc/larops/larops.yaml db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
+```
+
 ## 7) Telegram event-stream daemon
 
 ```bash

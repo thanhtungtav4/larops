@@ -4,38 +4,114 @@ set -euo pipefail
 LAROPS_REPO_URL="${LAROPS_REPO_URL:-https://github.com/thanhtungtav4/larops.git}"
 LAROPS_INSTALL_DIR="${LAROPS_INSTALL_DIR:-/opt/larops}"
 LAROPS_CONFIG_PATH="${LAROPS_CONFIG_PATH:-/etc/larops/larops.yaml}"
-LAROPS_VERSION="${LAROPS_VERSION:-latest}"
+LAROPS_VERSION="${LAROPS_VERSION:-0.1.0}"
+LAROPS_RELEASE_BASE_URL="${LAROPS_RELEASE_BASE_URL:-https://github.com/thanhtungtav4/larops/releases/download}"
+LAROPS_ALLOW_UNPINNED="${LAROPS_ALLOW_UNPINNED:-false}"
+LAROPS_SKIP_CHECKSUM="${LAROPS_SKIP_CHECKSUM:-false}"
+
+is_true() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_tag() {
+  local raw="$1"
+  if [[ "${raw}" == v* ]]; then
+    printf '%s' "${raw}"
+  else
+    printf 'v%s' "${raw}"
+  fi
+}
+
+assert_safe_install_dir() {
+  case "${LAROPS_INSTALL_DIR}" in
+    ""|"/"|"/opt"|"/usr"|"/var"|"/etc"|"/home")
+      echo "[larops-install] Unsafe install dir: ${LAROPS_INSTALL_DIR}"
+      exit 1
+      ;;
+  esac
+}
+
+install_from_release_asset() {
+  local tag="$1"
+  local tmp_dir archive_name archive_path checksum_path archive_url checksum_url expected actual
+
+  tmp_dir="$(mktemp -d)"
+  archive_name="larops-${tag}.tar.gz"
+  archive_path="${tmp_dir}/${archive_name}"
+  checksum_path="${tmp_dir}/SHA256SUMS"
+  archive_url="${LAROPS_RELEASE_BASE_URL}/${tag}/${archive_name}"
+  checksum_url="${LAROPS_RELEASE_BASE_URL}/${tag}/SHA256SUMS"
+
+  echo "[larops-install] Downloading release archive ${archive_name}..."
+  curl -fsSL "${archive_url}" -o "${archive_path}"
+
+  if is_true "${LAROPS_SKIP_CHECKSUM}"; then
+    echo "[larops-install] WARNING: checksum verification is disabled (LAROPS_SKIP_CHECKSUM=true)."
+  else
+    echo "[larops-install] Verifying checksum from ${checksum_url}..."
+    curl -fsSL "${checksum_url}" -o "${checksum_path}"
+    expected="$(awk -v target="${archive_name}" '$2==target {print $1}' "${checksum_path}")"
+    if [[ -z "${expected}" ]]; then
+      echo "[larops-install] Missing checksum entry for ${archive_name}."
+      rm -rf "${tmp_dir}"
+      exit 1
+    fi
+    actual="$(sha256sum "${archive_path}" | awk '{print $1}')"
+    if [[ "${expected}" != "${actual}" ]]; then
+      echo "[larops-install] Checksum mismatch for ${archive_name}."
+      rm -rf "${tmp_dir}"
+      exit 1
+    fi
+  fi
+
+  assert_safe_install_dir
+  rm -rf "${LAROPS_INSTALL_DIR}"
+  mkdir -p "${LAROPS_INSTALL_DIR}"
+  tar -xzf "${archive_path}" -C "${LAROPS_INSTALL_DIR}" --strip-components=1
+  rm -rf "${tmp_dir}"
+}
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "[larops-install] Please run as root."
   exit 1
 fi
 
+if [[ "${LAROPS_VERSION}" == "latest" || "${LAROPS_VERSION}" == "main" ]]; then
+  if ! is_true "${LAROPS_ALLOW_UNPINNED}"; then
+    echo "[larops-install] Refusing unpinned install (${LAROPS_VERSION})."
+    echo "[larops-install] Use pinned version (e.g. LAROPS_VERSION=0.1.0),"
+    echo "[larops-install] or explicitly set LAROPS_ALLOW_UNPINNED=true to continue."
+    exit 1
+  fi
+fi
+
 echo "[larops-install] Installing base dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y git curl ca-certificates python3 python3-venv python3-pip
+apt-get install -y git curl ca-certificates python3 python3-venv python3-pip tar
 
-if [[ -d "${LAROPS_INSTALL_DIR}/.git" ]]; then
-  echo "[larops-install] Existing install found, pulling latest source..."
-  git -C "${LAROPS_INSTALL_DIR}" fetch --all --prune
-else
-  echo "[larops-install] Cloning source from ${LAROPS_REPO_URL}..."
-  rm -rf "${LAROPS_INSTALL_DIR}"
-  git clone "${LAROPS_REPO_URL}" "${LAROPS_INSTALL_DIR}"
-fi
-
-if [[ "${LAROPS_VERSION}" == "latest" ]]; then
+if [[ "${LAROPS_VERSION}" == "latest" || "${LAROPS_VERSION}" == "main" ]]; then
+  if [[ -d "${LAROPS_INSTALL_DIR}/.git" ]]; then
+    echo "[larops-install] Existing install found, pulling latest source..."
+    git -C "${LAROPS_INSTALL_DIR}" fetch --all --prune
+  else
+    assert_safe_install_dir
+    echo "[larops-install] Cloning source from ${LAROPS_REPO_URL}..."
+    rm -rf "${LAROPS_INSTALL_DIR}"
+    git clone "${LAROPS_REPO_URL}" "${LAROPS_INSTALL_DIR}"
+  fi
   echo "[larops-install] Using latest main branch..."
   git -C "${LAROPS_INSTALL_DIR}" checkout main
   git -C "${LAROPS_INSTALL_DIR}" pull --ff-only
 else
-  tag="${LAROPS_VERSION}"
-  if [[ "${tag}" != v* ]]; then
-    tag="v${tag}"
-  fi
+  tag="$(normalize_tag "${LAROPS_VERSION}")"
   echo "[larops-install] Using pinned version ${tag}..."
-  git -C "${LAROPS_INSTALL_DIR}" checkout "${tag}"
+  install_from_release_asset "${tag}"
 fi
 
 echo "[larops-install] Setting up Python virtual environment..."

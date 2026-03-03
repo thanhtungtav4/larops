@@ -62,6 +62,21 @@ def run_issue(command: list[str]) -> str:
     return (completed.stdout or "").strip()
 
 
+def build_delete_command(*, domain: str) -> list[str]:
+    return [
+        "certbot",
+        "delete",
+        "--cert-name",
+        domain,
+        "--non-interactive",
+    ]
+
+
+def run_delete(command: list[str]) -> str:
+    completed = run_command(command, check=True)
+    return (completed.stdout or completed.stderr or "").strip()
+
+
 def build_renew_command(*, force: bool, dry_run: bool) -> list[str]:
     command = ["certbot", "renew"]
     if force:
@@ -99,4 +114,3 @@ def read_certificate_info(cert_file: Path) -> CertificateInfo:
         not_after=not_after,
         days_remaining=days_remaining,
     )
-

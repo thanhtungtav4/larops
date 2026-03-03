@@ -28,7 +28,9 @@ from larops.services.runtime_process import disable_process as runtime_disable_p
 from larops.services.runtime_process import status_process as runtime_status_process
 from larops.services.ssl_service import (
     SslServiceError,
+    build_delete_command,
     build_issue_command,
+    run_delete,
     run_issue,
 )
 
@@ -274,13 +276,24 @@ def _atomic_rollback_create_site(
             steps.append({"step": "cleanup_runtime_dir", "status": "error", "detail": str(exc)})
 
     if letsencrypt:
-        steps.append(
-            {
-                "step": "tls_note",
-                "status": "warn",
-                "detail": "TLS cert may need manual cleanup if certbot already issued certificate.",
-            }
-        )
+        try:
+            cleanup_command = build_delete_command(domain=domain)
+            run_delete(cleanup_command)
+            steps.append(
+                {
+                    "step": "cleanup_tls",
+                    "status": "ok",
+                    "detail": "Certbot certificate cleanup completed.",
+                }
+            )
+        except (SslServiceError, ShellCommandError) as exc:
+            steps.append(
+                {
+                    "step": "cleanup_tls",
+                    "status": "warn",
+                    "detail": f"TLS cleanup failed and may need manual action: {exc}",
+                }
+            )
 
     return steps
 

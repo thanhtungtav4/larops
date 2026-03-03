@@ -83,6 +83,9 @@ def test_ssl_auto_renew_enable_apply_writes_units(tmp_path: Path) -> None:
     timer = tmp_path / "units" / "larops-ssl-renew.timer"
     assert service.exists()
     assert timer.exists()
+    service_body = service.read_text(encoding="utf-8")
+    assert "NoNewPrivileges=true" in service_body
+    assert "UMask=0077" in service_body
     assert "OnCalendar=*-*-* 02:00:00" in timer.read_text(encoding="utf-8")
 
 

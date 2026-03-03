@@ -32,6 +32,7 @@ def create_delete_checkpoint(
     state_path: Path,
     domain: str,
     checkpoint_dir: Path | None = None,
+    include_secrets: bool = False,
 ) -> Path:
     ensure_app_registered(base_releases_path, state_path, domain)
     paths = get_app_paths(base_releases_path, state_path, domain)
@@ -39,7 +40,8 @@ def create_delete_checkpoint(
     credential_file = state_path / "secrets" / "db" / f"{domain}.cnf"
 
     target_dir = checkpoint_dir or default_checkpoint_dir(state_path, domain)
-    target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target_dir.chmod(0o700)
     checkpoint = target_dir / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}.tar.gz"
 
     added_entries = 0
@@ -53,12 +55,13 @@ def create_delete_checkpoint(
         if runtime_dir.exists():
             archive.add(runtime_dir, arcname=f"state/runtime/{domain}")
             added_entries += 1
-        if credential_file.exists():
+        if include_secrets and credential_file.exists():
             archive.add(credential_file, arcname=f"state/secrets/db/{domain}.cnf")
             added_entries += 1
 
     if added_entries == 0:
         raise SiteDeleteError(f"No artifacts found to checkpoint for {domain}.")
+    checkpoint.chmod(0o600)
     return checkpoint
 
 

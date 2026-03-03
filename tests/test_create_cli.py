@@ -401,6 +401,7 @@ def test_create_site_atomic_rolls_back_on_ssl_failure(tmp_path: Path, monkeypatc
         raise SslServiceError("certbot failed")
 
     monkeypatch.setattr("larops.commands.create.run_issue", fake_run_issue)
+    monkeypatch.setattr("larops.commands.create.run_delete", lambda _command: "")
     result = runner.invoke(
         app,
         [
@@ -419,3 +420,41 @@ def test_create_site_atomic_rolls_back_on_ssl_failure(tmp_path: Path, monkeypatc
     app_root = tmp_path / "apps" / "demo.test"
     assert not metadata.exists()
     assert not app_root.exists()
+
+
+def test_create_site_atomic_attempts_ssl_cleanup_on_failure(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    captured: dict[str, object] = {}
+
+    def fake_run_issue(_command: list[str]) -> str:
+        raise SslServiceError("certbot failed")
+
+    def fake_build_delete_command(*, domain: str) -> list[str]:
+        captured["domain"] = domain
+        return ["certbot", "delete", "--cert-name", domain, "--non-interactive"]
+
+    def fake_run_delete(command: list[str]) -> str:
+        captured["command"] = command
+        return "cleanup ok"
+
+    monkeypatch.setattr("larops.commands.create.run_issue", fake_run_issue)
+    monkeypatch.setattr("larops.commands.create.build_delete_command", fake_build_delete_command)
+    monkeypatch.setattr("larops.commands.create.run_delete", fake_run_delete)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "-le",
+            "--atomic",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    assert captured["domain"] == "demo.test"
+    assert captured["command"] == ["certbot", "delete", "--cert-name", "demo.test", "--non-interactive"]

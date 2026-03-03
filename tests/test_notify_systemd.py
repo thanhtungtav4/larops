@@ -37,6 +37,9 @@ def test_enable_telegram_daemon_writes_unit_and_calls_systemctl(monkeypatch, tmp
     assert unit_path.exists()
     assert "notify telegram watch --interval 15 --iterations 0 --apply --batch-size 30" in unit_text
     assert 'EnvironmentFile=-"/etc/larops/telegram.env"' in unit_text
+    assert "NoNewPrivileges=true" in unit_text
+    assert "ProtectSystem=full" in unit_text
+    assert "UMask=0027" in unit_text
     assert ["systemctl", "daemon-reload"] in calls
     assert ["systemctl", "enable", "--now", service] in calls
 

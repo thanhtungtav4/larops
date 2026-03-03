@@ -39,6 +39,12 @@ def render_ssl_renew_service(*, renew_command: list[str], user: str) -> str:
             "[Service]",
             "Type=oneshot",
             f"User={user}",
+            "NoNewPrivileges=true",
+            "PrivateTmp=true",
+            "ProtectHome=read-only",
+            "RestrictSUIDSGID=true",
+            "LockPersonality=true",
+            "UMask=0077",
             f"ExecStart={exec_start}",
             "",
         ]

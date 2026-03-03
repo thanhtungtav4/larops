@@ -52,6 +52,9 @@ def test_enable_process_calls_systemd_and_writes_quoted_unit(monkeypatch, tmp_pa
     assert spec["enabled"] is True
     assert unit_path.exists()
     assert expected_cd in unit_body
+    assert "NoNewPrivileges=true" in unit_body
+    assert "ProtectSystem=full" in unit_body
+    assert "UMask=0027" in unit_body
     assert ["systemctl", "daemon-reload"] in calls
     assert ["systemctl", "enable", "--now", service] in calls
 

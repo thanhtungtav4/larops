@@ -18,9 +18,11 @@ from larops.services.db_service import (
     default_backup_dir,
     default_credential_file,
     list_backups,
+    normalize_db_engine,
     run_backup,
     run_restore,
     write_mysql_credentials,
+    write_postgres_credentials,
 )
 
 db_app = typer.Typer(help="Manage database backup and restore.")
@@ -40,8 +42,14 @@ def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, met
     )
 
 
-def _resolve_credential_path(app_ctx: AppContext, domain: str, credential_file: Path | None) -> Path:
-    return credential_file or default_credential_file(Path(app_ctx.config.state_path), domain)
+def _resolve_credential_path(
+    app_ctx: AppContext,
+    domain: str,
+    credential_file: Path | None,
+    *,
+    engine: str,
+) -> Path:
+    return credential_file or default_credential_file(Path(app_ctx.config.state_path), domain, engine=engine)
 
 
 @credential_app.command("set")
@@ -49,9 +57,10 @@ def credential_set(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Application domain."),
     user: str = typer.Option(..., "--user", help="Database user."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
     password_env: str = typer.Option("LAROPS_DB_PASSWORD", "--password-env", help="Env var containing DB password."),
     host: str = typer.Option("127.0.0.1", "--host", help="Database host."),
-    port: int = typer.Option(3306, "--port", help="Database port."),
+    port: int | None = typer.Option(None, "--port", help="Database port (default: mysql=3306, postgres=5432)."),
     credential_file: Path | None = typer.Option(
         None,
         "--credential-file",
@@ -61,17 +70,29 @@ def credential_set(
     apply: bool = typer.Option(False, "--apply", help="Apply credential write."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    target = _resolve_credential_path(app_ctx, domain, credential_file)
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    resolved_port = port if port is not None else (5432 if normalized_engine == "postgres" else 3306)
+    if resolved_port < 1:
+        app_ctx.emit_output("error", "Database port must be >= 1.")
+        raise typer.Exit(code=2)
+
+    target = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
     password = os.getenv(password_env, "")
 
     app_ctx.emit_output(
         "ok",
         f"Credential set plan prepared for {domain}",
         domain=domain,
+        engine=normalized_engine,
         credential_file=str(target),
         user=user,
         host=host,
-        port=port,
+        port=resolved_port,
         password_env=password_env,
         apply=apply,
         dry_run=app_ctx.dry_run,
@@ -85,25 +106,35 @@ def credential_set(
 
     try:
         with CommandLock("db-credential-set"):
-            write_mysql_credentials(
-                credential_file=target,
-                user=user,
-                password=password,
-                host=host,
-                port=port,
-            )
+            if normalized_engine == "mysql":
+                write_mysql_credentials(
+                    credential_file=target,
+                    user=user,
+                    password=password,
+                    host=host,
+                    port=resolved_port,
+                )
+            else:
+                write_postgres_credentials(
+                    credential_file=target,
+                    user=user,
+                    password=password,
+                    host=host,
+                    port=resolved_port,
+                )
     except (CommandLockError, DbServiceError) as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=1) from exc
 
     _emit(app_ctx, "info", "db.credential.set", "DB credential file updated.", {"domain": domain, "file": str(target)})
-    app_ctx.emit_output("ok", f"Credential file updated for {domain}", credential_file=str(target))
+    app_ctx.emit_output("ok", f"Credential file updated for {domain}", credential_file=str(target), engine=normalized_engine)
 
 
 @credential_app.command("show")
 def credential_show(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
     credential_file: Path | None = typer.Option(
         None,
         "--credential-file",
@@ -112,13 +143,20 @@ def credential_show(
     ),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    target = _resolve_credential_path(app_ctx, domain, credential_file)
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    target = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
     exists = target.exists()
     mode = oct(target.stat().st_mode & 0o777) if exists else None
     app_ctx.emit_output(
         "ok",
         f"Credential file status for {domain}",
         domain=domain,
+        engine=normalized_engine,
         credential_file=str(target),
         exists=exists,
         mode=mode,
@@ -129,6 +167,7 @@ def credential_show(
 def backup(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
     database: str = typer.Option(..., "--database", help="Database name."),
     credential_file: Path | None = typer.Option(
         None,
@@ -140,15 +179,22 @@ def backup(
     apply: bool = typer.Option(False, "--apply", help="Apply backup operation."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
     backup_dir = target_dir or default_backup_dir(Path(app_ctx.config.state_path), domain)
     backup_file = backup_dir / backup_filename(domain)
-    secret_file = _resolve_credential_path(app_ctx, domain, credential_file)
+    secret_file = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
 
     try:
         command_preview = build_backup_command(
             backup_file=backup_file,
             database=database,
             credential_file=secret_file,
+            engine=normalized_engine,
         )
     except DbServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -158,6 +204,7 @@ def backup(
         "ok",
         f"DB backup plan prepared for {domain}",
         domain=domain,
+        engine=normalized_engine,
         backup_file=str(backup_file),
         credential_file=str(secret_file),
         command=command_preview,
@@ -168,11 +215,13 @@ def backup(
         app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
         return
 
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    backup_dir.chmod(0o700)
     command = build_backup_command(
         backup_file=backup_file,
         database=database,
         credential_file=secret_file,
+        engine=normalized_engine,
     )
 
     try:
@@ -191,6 +240,7 @@ def backup(
 def restore(
     ctx: typer.Context,
     domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
     backup_file: Path = typer.Option(..., "--backup-file", help="Backup file path.", dir_okay=False),
     database: str = typer.Option(..., "--database", help="Database name."),
     credential_file: Path | None = typer.Option(
@@ -202,13 +252,20 @@ def restore(
     apply: bool = typer.Option(False, "--apply", help="Apply restore operation."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    secret_file = _resolve_credential_path(app_ctx, domain, credential_file)
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    secret_file = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
 
     try:
         preview = build_restore_command(
             backup_file=backup_file,
             database=database,
             credential_file=secret_file,
+            engine=normalized_engine,
         )
     except DbServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -218,6 +275,7 @@ def restore(
         "ok",
         f"DB restore plan prepared for {domain}",
         domain=domain,
+        engine=normalized_engine,
         backup_file=str(backup_file),
         credential_file=str(secret_file),
         command=preview,
@@ -232,6 +290,7 @@ def restore(
         backup_file=backup_file,
         database=database,
         credential_file=secret_file,
+        engine=normalized_engine,
     )
     try:
         with CommandLock("db-restore"):
@@ -262,4 +321,3 @@ def list_backup_files(
         backups=files,
         count=len(files),
     )
-

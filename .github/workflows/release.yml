@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   validate:
@@ -89,11 +91,28 @@ jobs:
           python -m pip install build
           python -m build
 
+      - name: Prepare source archive and checksums
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p release-assets
+          ARCHIVE="larops-${GITHUB_REF_NAME}.tar.gz"
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" -o "${ARCHIVE}"
+          sha256sum dist/* scripts/install.sh "${ARCHIVE}" > SHA256SUMS
+          cp dist/* release-assets/
+          mv "${ARCHIVE}" SHA256SUMS release-assets/
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
           name: larops-dist
-          path: dist/*
+          path: release-assets/*
+
+      - name: Generate build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets/*
 
   github_release:
     name: Publish GitHub Release
