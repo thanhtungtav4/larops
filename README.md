@@ -1,122 +1,150 @@
-# larops
+# LarOps
 
-Laravel-first server operations CLI.
+Laravel-first server operations CLI for fast provisioning, deployment, runtime control, and safe lifecycle management on Linux servers.
 
-## Purpose
+## Table of Contents
 
-LarOps standardizes Laravel infrastructure operations in this order:
+1. [Why LarOps](#why-larops)
+2. [Feature Overview](#feature-overview)
+3. [Requirements](#requirements)
+4. [Quick Start](#quick-start)
+5. [Core Concepts](#core-concepts)
+6. [Configuration](#configuration)
+7. [Standard Operations Flow](#standard-operations-flow)
+8. [Site Profile Presets](#site-profile-presets)
+9. [Runtime Policy Matrix](#runtime-policy-matrix)
+10. [Command Cheat Sheet](#command-cheat-sheet)
+11. [Telegram Notifications](#telegram-notifications)
+12. [Docker and Local QA](#docker-and-local-qa)
+13. [GitHub CI/CD](#github-cicd)
+14. [Release Process](#release-process)
+15. [Security and Safety Notes](#security-and-safety-notes)
+16. [Troubleshooting](#troubleshooting)
+17. [Repository Structure](#repository-structure)
+18. [Production Runbook](#production-runbook)
 
-1. Stack provisioning (`nginx`, `php-fpm`, `mysql/mariadb`, `redis`, `supervisor`)
-2. Application lifecycle (`create`, `deploy`, `rollback`)
-3. Runtime controls (`worker`, `scheduler`, `horizon`)
-4. Operability (`ssl`, `backup`, `doctor`, event stream)
-5. Safe destroy flow (`site delete --purge` with checkpoint + guard)
+## Why LarOps
 
-## Current Stage
+LarOps is designed for teams that want WordOps-like speed, but focused on Laravel operations.
 
-S6 foundation: WordOps-style bootstrap flow, app lifecycle, runtime process controls, SSL lifecycle, DB backup/restore, release flow, and Telegram event-stream adapter (including systemd daemon mode).
+Main goals:
 
-## Empty Server One-Liner
+- Bootstrap an empty server quickly.
+- Create and deploy Laravel sites with one command.
+- Manage runtime processes (`worker`, `scheduler`, `horizon`) with consistent safety controls.
+- Enforce safer destructive actions (`--purge` + guard + checkpoint).
+- Keep release workflow predictable with CI/CD and SemVer tags.
+
+## Feature Overview
+
+- Stack provisioning (`stack install`, `bootstrap init`).
+- App lifecycle (`app create`, `app deploy`, `app rollback`, `app info`).
+- Site lifecycle shortcuts (`site create`, `site runtime`, `site permissions`, `site delete`).
+- SSL lifecycle (`ssl issue`, `ssl renew`, `ssl check`).
+- Database backup/restore and credentials (`db backup`, `db restore`, `db credential`).
+- Event-stream based notifications (`notify telegram run-once/watch/daemon`).
+- Health checks (`doctor run`, `doctor quick`).
+- Runtime protection with restart policy matrix and auto-heal.
+
+## Requirements
+
+Production host requirements:
+
+- Linux server with `systemd` (recommended for production runtime control).
+- `python >= 3.11`.
+- Root or sudo access for stack install and system-level operations.
+- Network access to install packages and call external APIs (for SSL/Telegram).
+
+Development requirements:
+
+- Python 3.11+.
+- Docker (optional, for containerized test flow).
+
+## Quick Start
+
+### Empty server one-liner
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | sudo bash
 larops bootstrap init --apply
 ```
 
-Install pinned release:
+Install pinned version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
   sudo LAROPS_VERSION=0.1.0 bash
 ```
 
-Optional app bootstrap in one go:
-
-```bash
-larops bootstrap init --domain example.com --source /var/www/source --apply
-```
-
-WordOps-style short create (recommended order):
-
-```bash
-# 1) Create/deploy with profile presets
-larops create site example.com --apply
-larops create site example.com --type laravel --cache redis --php 8.3 --apply
-larops create site example.com -le --apply
-
-# 2) Runtime controls
-larops site runtime enable example.com -w -s -a
-larops site runtime status example.com
-larops site runtime disable example.com -a
-
-# 3) Re-assign permissions (Laravel-friendly defaults)
-larops site permissions example.com --apply
-larops site permissions example.com --owner www-data --group www-data --apply
-
-# 4) Safe delete (checkpoint + guard)
-larops site delete example.com --purge --confirm example.com --apply
-```
-
-## Quick Start
+### Local development
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 larops --help
-pytest
+pytest -q
 ```
 
-## GitHub CI/CD
+## Core Concepts
 
-Pipeline files:
+### Plan mode first, apply second
 
-- `.github/workflows/ci.yml`
-- `.github/workflows/release.yml`
+Most commands are safe by default:
 
-CI triggers:
+- Without `--apply`: preview only (plan mode).
+- With `--apply`: execute changes.
 
-- `pull_request` vào `main`
-- `push` vào `main`
+This pattern is used across site/runtime/db/notify commands.
 
-CI checks:
+### State model
 
-- Ruff + Pytest trên Python `3.11`, `3.12`, `3.13`
-- Docker build + container test + CLI smoke
+LarOps stores state metadata under `state_path`:
 
-CD release trigger:
+- App metadata (`state/apps/<domain>.json`)
+- Runtime specs (`state/runtime/<domain>/*.json`)
+- DB credentials (`state/secrets/db/<domain>.cnf`)
+- Event stream file (`events.path`)
 
-- `push` tag dạng `vX.Y.Z` (ví dụ `v0.2.0`)
+### Runtime behavior
 
-CD release actions:
+Runtime processes are represented by JSON specs and optional systemd units:
 
-- Validate tag/version (`pyproject.toml` + `src/larops/__init__.py`)
-- Run Ruff + Pytest
-- Build `sdist` + `wheel`
-- Create GitHub Release và upload `dist/*` + `scripts/install.sh`
+- `worker`
+- `scheduler`
+- `horizon`
 
-Repo setting required:
+When `systemd.manage=true`, LarOps manages unit lifecycle (enable/disable/status/restart).
 
-- `Settings -> Actions -> Workflow permissions -> Read and write permissions`
+## Configuration
 
-## App Lifecycle Example
+Default config path:
+
+- `/etc/larops/larops.yaml`
+
+You can override with:
 
 ```bash
-cat > /tmp/larops.yaml <<'YAML'
-environment: test
-state_path: /tmp/larops-state
+larops --config /path/to/larops.yaml ...
+```
+
+Example config:
+
+```yaml
+environment: production
+state_path: /var/lib/larops/state
+
 deploy:
-  releases_path: /tmp/larops-apps
-  source_base_path: /tmp/larops-source
-  keep_releases: 3
+  releases_path: /var/www
+  source_base_path: /var/www/source
+  keep_releases: 5
   health_check_path: /up
-events:
-  sink: jsonl
-  path: /tmp/larops-events.jsonl
+
 systemd:
-  manage: false
-  unit_dir: /tmp/larops-systemd
+  manage: true
+  unit_dir: /etc/systemd/system
   user: www-data
+
 runtime_policy:
   worker:
     max_restarts: 5
@@ -133,86 +161,238 @@ runtime_policy:
     window_seconds: 300
     cooldown_seconds: 120
     auto_heal: true
+
+events:
+  sink: jsonl
+  path: /var/log/larops/events.jsonl
+
 notifications:
   telegram:
-    enabled: true
+    enabled: false
     bot_token: ""
     bot_token_file: /etc/larops/secrets/telegram_bot_token
     chat_id: ""
     chat_id_file: /etc/larops/secrets/telegram_chat_id
     min_severity: error
     batch_size: 20
-YAML
-
-larops --config /tmp/larops.yaml app create demo.test --apply
-larops --config /tmp/larops.yaml app deploy demo.test --source . --apply
-larops --config /tmp/larops.yaml app rollback demo.test --to previous --apply
-larops --config /tmp/larops.yaml --json app info demo.test
-
-# Runtime process control (systemd real mode when systemd.manage=true)
-larops --config /tmp/larops.yaml worker enable demo.test --queue default --concurrency 2 --apply
-larops --config /tmp/larops.yaml scheduler enable demo.test --apply
-larops --config /tmp/larops.yaml horizon enable demo.test --apply
-larops --config /tmp/larops.yaml --json worker status demo.test
-
-# WordOps-style one command for create + deploy (+ optional runtime)
-mkdir -p /tmp/larops-source/demo.test
-cp -R . /tmp/larops-source/demo.test
-larops --config /tmp/larops.yaml create site demo.test --worker --scheduler --apply
-larops --config /tmp/larops.yaml create site demo.test --type laravel --cache redis --apply
-larops --config /tmp/larops.yaml create site demo.test -le --le-email ops@example.com --apply
-larops --config /tmp/larops.yaml site create demo.test -w -s -a
-larops --config /tmp/larops.yaml site runtime disable demo.test -a
-larops --config /tmp/larops.yaml site runtime enable demo.test -w -s -a
-larops --config /tmp/larops.yaml site runtime status demo.test
-larops --config /tmp/larops.yaml site permissions demo.test --apply
-larops --config /tmp/larops.yaml site delete demo.test --purge --confirm demo.test --apply
-
-# SSL lifecycle
-larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
-
-# DB credential + backup/restore
-export LAROPS_DB_PASSWORD="strong-password"
-larops --config /tmp/larops.yaml db credential set demo.test --user appuser --apply
-larops --config /tmp/larops.yaml db backup demo.test --database appdb --apply
-larops --config /tmp/larops.yaml db list-backups demo.test
-
-# Telegram adapter from event stream
-larops --config /tmp/larops.yaml notify telegram run-once --apply
-larops --config /tmp/larops.yaml notify telegram daemon enable --apply
-
-# Health checks
-larops --config /tmp/larops.yaml --json doctor run demo.test
 ```
 
-## Profile Presets
+Environment overrides are supported for key fields (including Telegram settings).
 
-- `--type php`: no runtime, `db=none`, `ssl=false`
-- `--type mysql`: no runtime, `db=mysql`, `ssl=false`
+Important:
+
+- Secret file overrides are fail-fast (missing/empty file causes config error).
+- Invalid numeric env values (for example invalid batch size) also fail fast.
+
+## Standard Operations Flow
+
+### 1. Bootstrap host
+
+```bash
+larops bootstrap init --apply
+```
+
+Optional one-shot bootstrap + first site deploy:
+
+```bash
+larops bootstrap init --domain example.com --source /var/www/source/example.com --apply
+```
+
+### 2. Create/deploy site
+
+Two equivalent entry points:
+
+```bash
+larops create site example.com --apply
+larops site create example.com --apply
+```
+
+With profile preset and cache preset:
+
+```bash
+larops site create example.com --type laravel --cache redis --php 8.3 --apply
+```
+
+With Let's Encrypt:
+
+```bash
+larops site create example.com -le --le-email ops@example.com --apply
+```
+
+With transactional guard:
+
+```bash
+larops site create example.com -le --atomic --apply
+```
+
+### 3. Manage runtime
+
+```bash
+larops site runtime enable example.com -w -s -a
+larops site runtime status example.com
+larops site runtime disable example.com -a
+```
+
+Direct process commands remain available:
+
+```bash
+larops worker enable example.com --queue default --concurrency 2 --apply
+larops scheduler enable example.com --apply
+larops horizon enable example.com --apply
+```
+
+### 4. Re-assign permissions
+
+```bash
+larops site permissions example.com --apply
+larops site permissions example.com --owner www-data --group www-data --apply
+```
+
+Custom modes and writable paths:
+
+```bash
+larops site permissions example.com \
+  --dir-mode 755 \
+  --file-mode 644 \
+  --writable-mode 775 \
+  --writable shared/storage \
+  --writable current/storage \
+  --apply
+```
+
+### 5. SSL lifecycle
+
+```bash
+larops ssl issue example.com --challenge http
+larops ssl renew
+larops ssl check example.com
+```
+
+### 6. DB backup/restore
+
+```bash
+export LAROPS_DB_PASSWORD="strong-password"
+larops db credential set example.com --user appuser --apply
+larops db backup example.com --database appdb --apply
+larops db list-backups example.com
+larops db restore example.com --backup-file /path/backup.sql.gz --database appdb --apply
+```
+
+### 7. Health checks
+
+```bash
+larops doctor quick
+larops --json doctor run example.com
+```
+
+### 8. Safe delete (guarded)
+
+```bash
+larops site delete example.com --purge --confirm example.com --apply
+```
+
+Or non-interactive guard bypass:
+
+```bash
+larops site delete example.com --purge --no-prompt --apply
+```
+
+Delete behavior:
+
+- Requires `--purge`.
+- Requires `--confirm <domain>` unless `--no-prompt`.
+- Creates checkpoint archive by default before purge.
+
+## Site Profile Presets
+
+`site create` supports preset mapping with override capability.
+
+Type presets:
+
+- `--type php`: runtime off, `db=none`, `ssl=false`
+- `--type mysql`: runtime off, `db=mysql`, `ssl=false`
 - `--type laravel`: worker+scheduler on, `db=mysql`, `ssl=true`
 - `--type queue`: worker+scheduler on, `db=mysql`, `ssl=true`
 - `--type horizon`: scheduler+horizon on, `db=mysql`, `ssl=true`
-- `--cache redis`: enforces `worker=true`, `ssl=true`
-- `--cache fastcgi|supercache`: enforces `ssl=true`
-- Manual flags override preset (`--no-worker`, `--db`, `--ssl`, `--php`).
+
+Cache presets:
+
+- `--cache none`
+- `--cache fastcgi`: sets `ssl=true`
+- `--cache redis`: sets `worker=true`, `ssl=true`
+- `--cache supercache`: sets `ssl=true`
+
+Override priority:
+
+- Manual flags override presets (`--no-worker`, `--db`, `--ssl`, `--php`, etc.).
 
 ## Runtime Policy Matrix
 
 Each process (`worker`, `scheduler`, `horizon`) supports:
 
-- `max_restarts`: restart attempts allowed per time window
-- `window_seconds`: time window for restart counting
-- `cooldown_seconds`: block restart until cooldown passes after threshold hit
-- `auto_heal`: when `status` detects failed service, LarOps attempts restart within policy limits
+- `max_restarts`: max restart attempts inside rolling window.
+- `window_seconds`: rolling window length.
+- `cooldown_seconds`: block further restart attempts after threshold.
+- `auto_heal`: during status checks, attempt self-heal restart if process is down.
 
-## Permission Reset
+Behavior:
 
-- Command: `larops site permissions <domain> --apply`
-- Default modes: `dir=755`, `file=644`, `writable=775`
-- Default writable paths: `shared/storage`, `shared/bootstrap`, `current/storage`, `current/bootstrap/cache`
-- Optional ownership reset: use both `--owner` and `--group`
+- Manual restart respects rate limit and cooldown.
+- Auto-heal also respects policy limits.
+- Policy is written into runtime spec for traceability.
 
-## Telegram Secrets and Daemon Mode
+## Command Cheat Sheet
+
+Stack and bootstrap:
+
+```bash
+larops stack install --web --data --ops --apply
+larops bootstrap init --apply
+```
+
+App lifecycle:
+
+```bash
+larops app create example.com --apply
+larops app deploy example.com --source /var/www/source/example.com --apply
+larops app rollback example.com --to previous --apply
+larops --json app info example.com
+```
+
+Site lifecycle:
+
+```bash
+larops site create example.com --apply
+larops site runtime enable example.com -w -s -a
+larops site permissions example.com --apply
+larops site delete example.com --purge --confirm example.com --apply
+```
+
+Runtime direct:
+
+```bash
+larops worker status example.com
+larops scheduler run-once example.com --apply
+larops horizon terminate example.com --apply
+```
+
+Database:
+
+```bash
+larops db credential show example.com
+larops db backup example.com --database appdb --apply
+larops db list-backups example.com
+```
+
+Notifications:
+
+```bash
+larops notify telegram run-once --apply
+larops notify telegram daemon enable --apply
+larops notify telegram daemon status
+```
+
+## Telegram Notifications
 
 Create secret files:
 
@@ -223,7 +403,7 @@ echo "-1001234567890" | sudo tee /etc/larops/secrets/telegram_chat_id >/dev/null
 sudo chmod 600 /etc/larops/secrets/telegram_bot_token /etc/larops/secrets/telegram_chat_id
 ```
 
-Optional env file for daemon (used by systemd unit):
+Optional daemon env file:
 
 ```bash
 sudo tee /etc/larops/telegram.env >/dev/null <<'ENV'
@@ -234,14 +414,7 @@ ENV
 sudo chmod 600 /etc/larops/telegram.env
 ```
 
-Enable/inspect daemon:
-
-```bash
-larops --config /etc/larops/larops.yaml notify telegram daemon enable --apply
-larops --config /etc/larops/larops.yaml notify telegram daemon status
-```
-
-## Docker Test
+## Docker and Local QA
 
 ```bash
 docker compose build
@@ -249,25 +422,141 @@ docker compose run --rm larops-test
 docker compose run --rm larops-cli
 ```
 
-## Installer Script
+## GitHub CI/CD
 
-Direct install script is in `scripts/install.sh`.  
-It installs dependencies, clones/updates source, installs LarOps into a venv, links `/usr/local/bin/larops`, and seeds `/etc/larops/larops.yaml`.
+Workflow files:
 
-## Release Flow
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
 
-1. Ensure clean git tree.
-2. Run `scripts/release.sh <semver>` (for example `scripts/release.sh 0.2.0`).
-3. Push release commit and tag (this triggers `release.yml`):
+CI (`ci.yml`) triggers:
+
+- Pull requests to `main`
+- Pushes to `main`
+- Manual dispatch
+
+CI stages:
+
+- Ruff + Pytest on Python `3.11`, `3.12`, `3.13`
+- Docker build + in-container tests + CLI smoke
+
+Release (`release.yml`) trigger:
+
+- Push tag matching `vX.Y.Z` (example `v0.2.0`)
+
+Release stages:
+
+- Validate tag format and exact version match in:
+  - `pyproject.toml`
+  - `src/larops/__init__.py`
+- Run Ruff + Pytest
+- Build artifacts (`sdist` + `wheel`)
+- Create GitHub Release and upload:
+  - `dist/*`
+  - `scripts/install.sh`
+
+Repository setting required for release job:
+
+- `Settings -> Actions -> Workflow permissions -> Read and write permissions`
+
+## Release Process
+
+Use the included release script:
+
+```bash
+scripts/release.sh 0.2.0
+```
+
+Script responsibilities:
+
+- Bump version in `pyproject.toml` and `src/larops/__init__.py`
+- Create changelog section in `CHANGELOG.md`
+- Create release commit and annotated tag (`v0.2.0`)
+
+Then push:
 
 ```bash
 git push origin main
 git push origin v0.2.0
 ```
 
-4. Wait for GitHub Actions release pipeline to complete.
-5. Install pinned release on server by setting `LAROPS_VERSION`.
+After tag push, GitHub release pipeline runs automatically.
+
+## Security and Safety Notes
+
+- Treat all destructive operations as two-step (`plan` then `--apply`).
+- `site delete` requires explicit safety guards.
+- Prefer secret files over plain env for credentials/tokens.
+- Keep secret files permissioned as owner-only (`0600`).
+- Use `--atomic` on `site create` for rollback on failure path.
+
+## Troubleshooting
+
+### "Application is not registered"
+
+Root cause:
+
+- Domain metadata missing in `state/apps/<domain>.json`.
+
+Fix:
+
+- Create site/app first:
+  - `larops site create <domain> --apply`
+
+### Runtime enable fails with "Deploy app before enabling ..."
+
+Root cause:
+
+- `current` release symlink missing.
+
+Fix:
+
+- Deploy first:
+  - `larops app deploy <domain> --source <path> --apply`
+
+### Config error from Telegram secret file
+
+Root cause:
+
+- `bot_token_file` or `chat_id_file` path missing/empty.
+
+Fix:
+
+- Create file, add value, set permission `600`, retry.
+
+### Release workflow fails on version mismatch
+
+Root cause:
+
+- Tag version does not match project files.
+
+Fix:
+
+- Use `scripts/release.sh <semver>` to keep versions aligned.
+
+## Repository Structure
+
+```text
+src/larops/
+  commands/        CLI command groups
+  services/        business logic and integrations
+  core/            shell, locks, event primitives
+  config.py        config models and env overrides
+
+scripts/
+  install.sh       install bootstrap script
+  release.sh       semver release helper
+
+.github/workflows/
+  ci.yml           PR/push CI pipeline
+  release.yml      tag-based release pipeline
+
+tests/
+  CLI and service tests
+```
 
 ## Production Runbook
 
-Detailed production runbook: [docs/PRODUCTION_RUNBOOK.md](/Volumes/Manager%20Data/Tool/larops/docs/PRODUCTION_RUNBOOK.md)
+Detailed production checklist and procedures:
+
+- [docs/PRODUCTION_RUNBOOK.md](/Volumes/Manager%20Data/Tool/larops/docs/PRODUCTION_RUNBOOK.md)
