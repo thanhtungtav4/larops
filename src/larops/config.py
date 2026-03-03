@@ -39,6 +39,19 @@ class SystemdConfig(BaseModel):
     user: str = "www-data"
 
 
+class RuntimePolicyItemConfig(BaseModel):
+    max_restarts: int = 5
+    window_seconds: int = 300
+    cooldown_seconds: int = 120
+    auto_heal: bool = True
+
+
+class RuntimePolicyConfig(BaseModel):
+    worker: RuntimePolicyItemConfig = Field(default_factory=RuntimePolicyItemConfig)
+    scheduler: RuntimePolicyItemConfig = Field(default_factory=RuntimePolicyItemConfig)
+    horizon: RuntimePolicyItemConfig = Field(default_factory=RuntimePolicyItemConfig)
+
+
 class NotificationsConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
@@ -48,6 +61,7 @@ class AppConfig(BaseModel):
     state_path: str = ".larops/state"
     deploy: DeployConfig = Field(default_factory=DeployConfig)
     systemd: SystemdConfig = Field(default_factory=SystemdConfig)
+    runtime_policy: RuntimePolicyConfig = Field(default_factory=RuntimePolicyConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 

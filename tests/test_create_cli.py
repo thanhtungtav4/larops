@@ -66,6 +66,64 @@ def test_site_create_plan_mode(tmp_path: Path) -> None:
     assert "Create site plan prepared for demo.test" in result.stdout
 
 
+def test_create_site_type_profile_applies_runtime_and_ssl(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "create", "site", "demo.test", "--type", "laravel"],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["profile"]["type"] == "laravel"
+    assert lines[0]["runtime"]["worker"] is True
+    assert lines[0]["runtime"]["scheduler"] is True
+    assert lines[0]["ssl"] is True
+
+
+def test_create_site_profile_override_runtime_flag(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "create",
+            "site",
+            "demo.test",
+            "--type",
+            "laravel",
+            "--no-worker",
+        ],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["runtime"]["worker"] is False
+    assert lines[0]["runtime"]["scheduler"] is True
+
+
+def test_create_site_invalid_type_rejected(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--type", "foobar"],
+    )
+    assert result.exit_code == 2
+    assert "Unsupported --type" in result.stdout
+
+
+def test_create_site_cache_redis_enables_worker(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "create", "site", "demo.test", "--cache", "redis"],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["profile"]["cache"] == "redis"
+    assert lines[0]["runtime"]["worker"] is True
+
+
 def test_create_site_dry_run_still_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     source = make_source(tmp_path, "demo.test")

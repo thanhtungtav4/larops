@@ -8,8 +8,16 @@ from larops.cli import app
 runner = CliRunner()
 
 
-def write_config(tmp_path: Path) -> Path:
+def write_config(
+    tmp_path: Path,
+    *,
+    max_restarts: int = 5,
+    window_seconds: int = 300,
+    cooldown_seconds: int = 120,
+    auto_heal: bool = True,
+) -> Path:
     config_file = tmp_path / "larops.yaml"
+    auto_heal_raw = "true" if auto_heal else "false"
     config_file.write_text(
         "\n".join(
             [
@@ -23,6 +31,22 @@ def write_config(tmp_path: Path) -> Path:
                 "  manage: false",
                 f"  unit_dir: {tmp_path / 'units'}",
                 "  user: www-data",
+                "runtime_policy:",
+                "  worker:",
+                f"    max_restarts: {max_restarts}",
+                f"    window_seconds: {window_seconds}",
+                f"    cooldown_seconds: {cooldown_seconds}",
+                f"    auto_heal: {auto_heal_raw}",
+                "  scheduler:",
+                f"    max_restarts: {max_restarts}",
+                f"    window_seconds: {window_seconds}",
+                f"    cooldown_seconds: {cooldown_seconds}",
+                f"    auto_heal: {auto_heal_raw}",
+                "  horizon:",
+                f"    max_restarts: {max_restarts}",
+                f"    window_seconds: {window_seconds}",
+                f"    cooldown_seconds: {cooldown_seconds}",
+                f"    auto_heal: {auto_heal_raw}",
                 "events:",
                 "  sink: jsonl",
                 f"  path: {tmp_path / 'events.jsonl'}",
@@ -40,8 +64,22 @@ def make_source(tmp_path: Path) -> Path:
     return source
 
 
-def bootstrap_app(tmp_path: Path, domain: str = "demo.test") -> Path:
-    config = write_config(tmp_path)
+def bootstrap_app(
+    tmp_path: Path,
+    domain: str = "demo.test",
+    *,
+    max_restarts: int = 5,
+    window_seconds: int = 300,
+    cooldown_seconds: int = 120,
+    auto_heal: bool = True,
+) -> Path:
+    config = write_config(
+        tmp_path,
+        max_restarts=max_restarts,
+        window_seconds=window_seconds,
+        cooldown_seconds=cooldown_seconds,
+        auto_heal=auto_heal,
+    )
     source = make_source(tmp_path)
     create = runner.invoke(app, ["--config", str(config), "app", "create", domain, "--apply"])
     assert create.exit_code == 0
@@ -182,3 +220,23 @@ def test_worker_enable_rejects_invalid_concurrency(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "Worker concurrency must be >= 1" in result.stdout
+
+
+def test_worker_restart_enforces_rate_limit_policy(tmp_path: Path) -> None:
+    config = bootstrap_app(
+        tmp_path,
+        max_restarts=1,
+        window_seconds=3600,
+        cooldown_seconds=120,
+    )
+    domain = "demo.test"
+
+    enable = runner.invoke(app, ["--config", str(config), "worker", "enable", domain, "--apply"])
+    assert enable.exit_code == 0
+
+    restart_first = runner.invoke(app, ["--config", str(config), "worker", "restart", domain, "--apply"])
+    assert restart_first.exit_code == 0
+
+    restart_second = runner.invoke(app, ["--config", str(config), "worker", "restart", domain, "--apply"])
+    assert restart_second.exit_code == 2
+    assert "Restart cooldown active" in restart_second.stdout

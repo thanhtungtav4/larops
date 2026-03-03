@@ -22,6 +22,10 @@ def _lock_name(domain: str) -> str:
     return f"horizon-{re.sub(r'[^a-zA-Z0-9]+', '-', domain)}"
 
 
+def _policy_for(app_ctx: AppContext) -> dict:
+    return app_ctx.config.runtime_policy.horizon.model_dump()
+
+
 @horizon_app.command("enable")
 def enable(
     ctx: typer.Context,
@@ -50,6 +54,7 @@ def enable(
                 domain=domain,
                 process_type="horizon",
                 options={},
+                policy=_policy_for(app_ctx),
             )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -141,5 +146,6 @@ def status(
         systemd_manage=app_ctx.config.systemd.manage,
         domain=domain,
         process_type="horizon",
+        policy=_policy_for(app_ctx),
     )
     app_ctx.emit_output("ok", f"Horizon status for {domain}", process=spec)

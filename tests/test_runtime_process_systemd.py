@@ -114,3 +114,46 @@ def test_status_process_reads_systemd_state(monkeypatch, tmp_path: Path) -> None
     )
     assert status["systemd"]["active"] == "active"
     assert status["systemd"]["enabled"] == "enabled"
+
+
+def test_status_process_auto_heals_failed_service(monkeypatch, tmp_path: Path) -> None:
+    domain = "demo.test"
+    base_releases, state_path = seed_deployed_app(tmp_path, domain)
+    unit_dir = tmp_path / "units"
+    restarted = {"value": False}
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"]:
+            state = "active\n" if restarted["value"] else "failed\n"
+            return CompletedProcess(command, 0, stdout=state, stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        if command[:2] == ["systemctl", "restart"]:
+            restarted["value"] = True
+            return CompletedProcess(command, 0, stdout="", stderr="")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.runtime_process.run_command", fake_run_command)
+    enable_process(
+        base_releases_path=base_releases,
+        state_path=state_path,
+        unit_dir=unit_dir,
+        systemd_manage=False,
+        service_user="www-data",
+        domain=domain,
+        process_type="worker",
+        options={"queue": "default", "tries": 3, "timeout": 90, "concurrency": 1},
+        policy={"max_restarts": 2, "window_seconds": 300, "cooldown_seconds": 120, "auto_heal": True},
+    )
+
+    status = status_process(
+        state_path=state_path,
+        unit_dir=unit_dir,
+        systemd_manage=True,
+        domain=domain,
+        process_type="worker",
+        policy={"max_restarts": 2, "window_seconds": 300, "cooldown_seconds": 120, "auto_heal": True},
+    )
+    assert status["auto_heal"]["status"] == "healed"
+    assert status["systemd"]["active"] == "active"
+    assert status["restart_count"] == 1

@@ -34,6 +34,21 @@ from larops.services.ssl_service import (
 
 create_app = typer.Typer(help="WordOps-style create shortcuts.")
 
+_TYPE_PRESETS: dict[str, dict[str, Any]] = {
+    "php": {"db": "none", "ssl": False, "runtime": {"worker": False, "scheduler": False, "horizon": False}},
+    "mysql": {"db": "mysql", "ssl": False, "runtime": {"worker": False, "scheduler": False, "horizon": False}},
+    "laravel": {"db": "mysql", "ssl": True, "runtime": {"worker": True, "scheduler": True, "horizon": False}},
+    "queue": {"db": "mysql", "ssl": True, "runtime": {"worker": True, "scheduler": True, "horizon": False}},
+    "horizon": {"db": "mysql", "ssl": True, "runtime": {"worker": False, "scheduler": True, "horizon": True}},
+}
+
+_CACHE_PRESETS: dict[str, dict[str, Any]] = {
+    "none": {"ssl": False},
+    "fastcgi": {"ssl": True},
+    "redis": {"ssl": True, "runtime": {"worker": True}},
+    "supercache": {"ssl": True},
+}
+
 
 def _lock_name(domain: str) -> str:
     return f"create-site-{re.sub(r'[^a-zA-Z0-9]+', '-', domain)}"
@@ -72,6 +87,71 @@ def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, 
         "scheduler": True,
         "horizon": True,
     }
+
+
+def _runtime_policy_for(app_ctx: AppContext, process_type: str) -> dict[str, Any]:
+    return app_ctx.config.runtime_policy.model_dump().get(process_type, {})
+
+
+def _apply_profile_patch(profile: dict[str, Any], patch: dict[str, Any]) -> None:
+    runtime_patch = patch.get("runtime")
+    if isinstance(runtime_patch, dict):
+        profile["runtime"].update(runtime_patch)
+    for key in ("db", "php", "ssl"):
+        if key in patch:
+            profile[key] = patch[key]
+
+
+def _resolve_site_profile(
+    *,
+    site_type: str | None,
+    cache: str | None,
+    worker: bool | None,
+    scheduler: bool | None,
+    horizon: bool | None,
+    db: str | None,
+    php: str | None,
+    ssl: bool | None,
+) -> dict[str, Any]:
+    profile: dict[str, Any] = {
+        "type": "custom",
+        "cache": "none",
+        "db": "mysql",
+        "php": "8.3",
+        "ssl": False,
+        "runtime": {"worker": False, "scheduler": False, "horizon": False},
+    }
+    if site_type:
+        normalized_type = site_type.strip().lower()
+        preset = _TYPE_PRESETS.get(normalized_type)
+        if preset is None:
+            supported = ", ".join(sorted(_TYPE_PRESETS))
+            raise RuntimeProcessError(f"Unsupported --type: {site_type}. Supported: {supported}.")
+        _apply_profile_patch(profile, preset)
+        profile["type"] = normalized_type
+
+    if cache:
+        normalized_cache = cache.strip().lower()
+        cache_preset = _CACHE_PRESETS.get(normalized_cache)
+        if cache_preset is None:
+            supported = ", ".join(sorted(_CACHE_PRESETS))
+            raise RuntimeProcessError(f"Unsupported --cache: {cache}. Supported: {supported}.")
+        _apply_profile_patch(profile, cache_preset)
+        profile["cache"] = normalized_cache
+
+    if db is not None:
+        profile["db"] = db
+    if php is not None:
+        profile["php"] = php
+    if ssl is not None:
+        profile["ssl"] = ssl
+    if worker is not None:
+        profile["runtime"]["worker"] = worker
+    if scheduler is not None:
+        profile["runtime"]["scheduler"] = scheduler
+    if horizon is not None:
+        profile["runtime"]["horizon"] = horizon
+    return profile
 
 
 def _validate_worker_options(*, concurrency: int, tries: int, timeout: int) -> None:
@@ -240,6 +320,7 @@ def _enable_runtime_for_site(
             domain=domain,
             process_type=process_type,
             options=options,
+            policy=_runtime_policy_for(app_ctx, process_type),
         )
     return results
 
@@ -280,6 +361,7 @@ def _status_runtime_for_site(
             systemd_manage=app_ctx.config.systemd.manage,
             domain=domain,
             process_type=process_type,
+            policy=_runtime_policy_for(app_ctx, process_type),
         )
     return results
 
@@ -416,9 +498,19 @@ def create_site(
     ),
     ref: str = typer.Option("main", "--ref", "-r", help="Source ref metadata."),
     deploy: bool = typer.Option(True, "--deploy/--no-deploy", help="Deploy source after create."),
-    worker: bool = typer.Option(False, "--worker/--no-worker", "-w", help="Enable queue worker."),
-    scheduler: bool = typer.Option(False, "--scheduler/--no-scheduler", "-s", help="Enable scheduler."),
-    horizon: bool = typer.Option(False, "--horizon/--no-horizon", help="Enable horizon."),
+    site_type: str | None = typer.Option(
+        None,
+        "--type",
+        help="WordOps-style site type preset (php|mysql|laravel|queue|horizon).",
+    ),
+    cache: str | None = typer.Option(
+        None,
+        "--cache",
+        help="Cache preset (none|fastcgi|redis|supercache).",
+    ),
+    worker: bool | None = typer.Option(None, "--worker/--no-worker", "-w", help="Enable queue worker."),
+    scheduler: bool | None = typer.Option(None, "--scheduler/--no-scheduler", "-s", help="Enable scheduler."),
+    horizon: bool | None = typer.Option(None, "--horizon/--no-horizon", help="Enable horizon."),
     queue: str = typer.Option("default", "--queue", "-q", help="Worker queue."),
     concurrency: int = typer.Option(1, "--concurrency", "-c", help="Worker concurrency."),
     tries: int = typer.Option(3, "--tries", "-t", help="Worker tries."),
@@ -428,9 +520,9 @@ def create_site(
         "--schedule-command",
         help="Scheduler command.",
     ),
-    php: str = typer.Option("8.3", "--php", help="PHP runtime version."),
-    db: str = typer.Option("mysql", "--db", help="Database engine."),
-    ssl: bool = typer.Option(False, "--ssl", help="Enable SSL metadata flag."),
+    php: str | None = typer.Option(None, "--php", help="PHP runtime version override."),
+    db: str | None = typer.Option(None, "--db", help="Database engine override."),
+    ssl: bool | None = typer.Option(None, "--ssl/--no-ssl", help="Enable SSL metadata flag."),
     letsencrypt: bool = typer.Option(
         False,
         "--letsencrypt",
@@ -450,7 +542,31 @@ def create_site(
     apply: bool = typer.Option(False, "--apply", "-a", help="Apply create site workflow."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    if not deploy and (worker or scheduler or horizon):
+    try:
+        site_profile = _resolve_site_profile(
+            site_type=site_type,
+            cache=cache,
+            worker=worker,
+            scheduler=scheduler,
+            horizon=horizon,
+            db=db,
+            php=php,
+            ssl=ssl,
+        )
+    except RuntimeProcessError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    runtime_plan = {
+        "worker": bool(site_profile["runtime"]["worker"]),
+        "scheduler": bool(site_profile["runtime"]["scheduler"]),
+        "horizon": bool(site_profile["runtime"]["horizon"]),
+    }
+    php_runtime = str(site_profile["php"])
+    db_engine = str(site_profile["db"])
+    ssl_enabled = bool(site_profile["ssl"])
+
+    if not deploy and (runtime_plan["worker"] or runtime_plan["scheduler"] or runtime_plan["horizon"]):
         app_ctx.emit_output(
             "error",
             "Runtime enable requires --deploy. Remove runtime flags or use --deploy.",
@@ -462,7 +578,7 @@ def create_site(
             "Let's Encrypt requires --deploy. Remove -le or use --deploy.",
         )
         raise typer.Exit(code=2)
-    if worker:
+    if runtime_plan["worker"]:
         try:
             _validate_worker_options(concurrency=concurrency, tries=tries, timeout=timeout)
         except RuntimeProcessError as exc:
@@ -493,22 +609,18 @@ def create_site(
         Path(app_ctx.config.state_path),
         domain,
     )
-    runtime_plan = {
-        "worker": worker,
-        "scheduler": scheduler,
-        "horizon": horizon,
-    }
     app_ctx.emit_output(
         "ok",
         f"Create site plan prepared for {domain}",
         domain=domain,
         source=str(source_path),
+        profile=site_profile,
         ref=ref,
         deploy=deploy,
         runtime=runtime_plan,
-        php=php,
-        db=db,
-        ssl=ssl or letsencrypt,
+        php=php_runtime,
+        db=db_engine,
+        ssl=ssl_enabled or letsencrypt,
         letsencrypt=letsencrypt,
         letsencrypt_command=ssl_issue_command,
         atomic=atomic,
@@ -545,9 +657,10 @@ def create_site(
         with CommandLock(_lock_name(domain)):
             metadata_payload = {
                 "domain": domain,
-                "php": php,
-                "db": db,
-                "ssl": ssl or letsencrypt,
+                "php": php_runtime,
+                "db": db_engine,
+                "ssl": ssl_enabled or letsencrypt,
+                "profile": site_profile,
                 "created_at": datetime.now(UTC).isoformat(),
             }
             initialize_app(paths, metadata_payload, overwrite=force)
@@ -564,43 +677,16 @@ def create_site(
                 }
                 save_metadata(paths.metadata, metadata)
 
-            if worker:
-                runtime_results["worker"] = enable_process(
-                    base_releases_path=Path(app_ctx.config.deploy.releases_path),
-                    state_path=Path(app_ctx.config.state_path),
-                    unit_dir=Path(app_ctx.config.systemd.unit_dir),
-                    systemd_manage=app_ctx.config.systemd.manage,
-                    service_user=app_ctx.config.systemd.user,
+            if any(runtime_plan.values()):
+                runtime_results = _enable_runtime_for_site(
+                    app_ctx=app_ctx,
                     domain=domain,
-                    process_type="worker",
-                    options={
-                        "queue": queue,
-                        "concurrency": concurrency,
-                        "tries": tries,
-                        "timeout": timeout,
-                    },
-                )
-            if scheduler:
-                runtime_results["scheduler"] = enable_process(
-                    base_releases_path=Path(app_ctx.config.deploy.releases_path),
-                    state_path=Path(app_ctx.config.state_path),
-                    unit_dir=Path(app_ctx.config.systemd.unit_dir),
-                    systemd_manage=app_ctx.config.systemd.manage,
-                    service_user=app_ctx.config.systemd.user,
-                    domain=domain,
-                    process_type="scheduler",
-                    options={"command": schedule_command},
-                )
-            if horizon:
-                runtime_results["horizon"] = enable_process(
-                    base_releases_path=Path(app_ctx.config.deploy.releases_path),
-                    state_path=Path(app_ctx.config.state_path),
-                    unit_dir=Path(app_ctx.config.systemd.unit_dir),
-                    systemd_manage=app_ctx.config.systemd.manage,
-                    service_user=app_ctx.config.systemd.user,
-                    domain=domain,
-                    process_type="horizon",
-                    options={},
+                    queue=queue,
+                    concurrency=concurrency,
+                    tries=tries,
+                    timeout=timeout,
+                    schedule_command=schedule_command,
+                    targets=runtime_plan,
                 )
             if letsencrypt:
                 assert ssl_issue_command is not None

@@ -45,6 +45,10 @@ def _emit(
     )
 
 
+def _policy_for(app_ctx: AppContext) -> dict:
+    return app_ctx.config.runtime_policy.worker.model_dump()
+
+
 @worker_app.command("enable")
 def enable(
     ctx: typer.Context,
@@ -103,6 +107,7 @@ def enable(
                 domain=domain,
                 process_type="worker",
                 options=options,
+                policy=_policy_for(app_ctx),
             )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -189,6 +194,7 @@ def restart(
                 systemd_manage=app_ctx.config.systemd.manage,
                 domain=domain,
                 process_type="worker",
+                policy=_policy_for(app_ctx),
             )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -211,5 +217,6 @@ def status(
         systemd_manage=app_ctx.config.systemd.manage,
         domain=domain,
         process_type="worker",
+        policy=_policy_for(app_ctx),
     )
     app_ctx.emit_output("ok", f"Worker status for {domain}", process=spec)

@@ -4,12 +4,13 @@ Laravel-first server operations CLI.
 
 ## Purpose
 
-LarOps standardizes Laravel infrastructure operations:
+LarOps standardizes Laravel infrastructure operations in this order:
 
 1. Stack provisioning (`nginx`, `php-fpm`, `mysql/mariadb`, `redis`, `supervisor`)
 2. Application lifecycle (`create`, `deploy`, `rollback`)
 3. Runtime controls (`worker`, `scheduler`, `horizon`)
 4. Operability (`ssl`, `backup`, `doctor`, event stream)
+5. Safe destroy flow (`site delete --purge` with checkpoint + guard)
 
 ## Current Stage
 
@@ -35,15 +36,21 @@ Optional app bootstrap in one go:
 larops bootstrap init --domain example.com --source /var/www/source --apply
 ```
 
-WordOps-style short create:
+WordOps-style short create (recommended order):
 
 ```bash
+# 1) Create/deploy with profile presets
 larops create site example.com --apply
+larops create site example.com --type laravel --cache redis --php 8.3 --apply
 larops create site example.com -le --apply
-larops site create example.com -a
-larops site create example.com -le -a
-larops site runtime disable example.com -a
+
+# 2) Runtime controls
+larops site runtime enable example.com -w -s -a
 larops site runtime status example.com
+larops site runtime disable example.com -a
+
+# 3) Safe delete (checkpoint + guard)
+larops site delete example.com --purge --confirm example.com --apply
 ```
 
 ## Quick Start
@@ -74,6 +81,22 @@ systemd:
   manage: false
   unit_dir: /tmp/larops-systemd
   user: www-data
+runtime_policy:
+  worker:
+    max_restarts: 5
+    window_seconds: 300
+    cooldown_seconds: 120
+    auto_heal: true
+  scheduler:
+    max_restarts: 3
+    window_seconds: 300
+    cooldown_seconds: 120
+    auto_heal: true
+  horizon:
+    max_restarts: 3
+    window_seconds: 300
+    cooldown_seconds: 120
+    auto_heal: true
 notifications:
   telegram:
     enabled: true
@@ -100,11 +123,13 @@ larops --config /tmp/larops.yaml --json worker status demo.test
 mkdir -p /tmp/larops-source/demo.test
 cp -R . /tmp/larops-source/demo.test
 larops --config /tmp/larops.yaml create site demo.test --worker --scheduler --apply
+larops --config /tmp/larops.yaml create site demo.test --type laravel --cache redis --apply
 larops --config /tmp/larops.yaml create site demo.test -le --le-email ops@example.com --apply
 larops --config /tmp/larops.yaml site create demo.test -w -s -a
 larops --config /tmp/larops.yaml site runtime disable demo.test -a
 larops --config /tmp/larops.yaml site runtime enable demo.test -w -s -a
 larops --config /tmp/larops.yaml site runtime status demo.test
+larops --config /tmp/larops.yaml site delete demo.test --purge --confirm demo.test --apply
 
 # SSL lifecycle
 larops --config /tmp/larops.yaml ssl issue demo.test --challenge http
@@ -122,6 +147,26 @@ larops --config /tmp/larops.yaml notify telegram daemon enable --apply
 # Health checks
 larops --config /tmp/larops.yaml --json doctor run demo.test
 ```
+
+## Profile Presets
+
+- `--type php`: no runtime, `db=none`, `ssl=false`
+- `--type mysql`: no runtime, `db=mysql`, `ssl=false`
+- `--type laravel`: worker+scheduler on, `db=mysql`, `ssl=true`
+- `--type queue`: worker+scheduler on, `db=mysql`, `ssl=true`
+- `--type horizon`: scheduler+horizon on, `db=mysql`, `ssl=true`
+- `--cache redis`: enforces `worker=true`, `ssl=true`
+- `--cache fastcgi|supercache`: enforces `ssl=true`
+- Manual flags override preset (`--no-worker`, `--db`, `--ssl`, `--php`).
+
+## Runtime Policy Matrix
+
+Each process (`worker`, `scheduler`, `horizon`) supports:
+
+- `max_restarts`: restart attempts allowed per time window
+- `window_seconds`: time window for restart counting
+- `cooldown_seconds`: block restart until cooldown passes after threshold hit
+- `auto_heal`: when `status` detects failed service, LarOps attempts restart within policy limits
 
 ## Telegram Secrets and Daemon Mode
 
