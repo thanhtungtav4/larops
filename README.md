@@ -67,6 +67,38 @@ larops --help
 pytest
 ```
 
+## GitHub CI/CD
+
+Pipeline files:
+
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+
+CI triggers:
+
+- `pull_request` vào `main`
+- `push` vào `main`
+
+CI checks:
+
+- Ruff + Pytest trên Python `3.11`, `3.12`, `3.13`
+- Docker build + container test + CLI smoke
+
+CD release trigger:
+
+- `push` tag dạng `vX.Y.Z` (ví dụ `v0.2.0`)
+
+CD release actions:
+
+- Validate tag/version (`pyproject.toml` + `src/larops/__init__.py`)
+- Run Ruff + Pytest
+- Build `sdist` + `wheel`
+- Create GitHub Release và upload `dist/*` + `scripts/install.sh`
+
+Repo setting required:
+
+- `Settings -> Actions -> Workflow permissions -> Read and write permissions`
+
 ## App Lifecycle Example
 
 ```bash
@@ -226,14 +258,15 @@ It installs dependencies, clones/updates source, installs LarOps into a venv, li
 
 1. Ensure clean git tree.
 2. Run `scripts/release.sh <semver>` (for example `scripts/release.sh 0.2.0`).
-3. Push release commit and tag:
+3. Push release commit and tag (this triggers `release.yml`):
 
 ```bash
 git push origin main
 git push origin v0.2.0
 ```
 
-4. Install pinned release on server by setting `LAROPS_VERSION`.
+4. Wait for GitHub Actions release pipeline to complete.
+5. Install pinned release on server by setting `LAROPS_VERSION`.
 
 ## Production Runbook
 
