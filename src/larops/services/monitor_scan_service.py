@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from larops.services.security_service import SUSPICIOUS_PATH_PATTERNS
+from larops.services.security_service import SUSPICIOUS_HTTP_STATUSES, SUSPICIOUS_PATH_PATTERNS
 
 
 class MonitorScanError(RuntimeError):
@@ -97,7 +97,7 @@ def scan_nginx_incremental(
         ip, path, status = _parse_nginx_line(line)
         if not ip or not path or not status:
             continue
-        if status not in {"403", "404", "444"}:
+        if status not in SUSPICIOUS_HTTP_STATUSES:
             continue
         if not _is_suspicious(path):
             continue

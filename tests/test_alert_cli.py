@@ -104,3 +104,30 @@ def test_alert_test_apply_fails_when_not_configured(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config", str(config), "alert", "test", "--apply"])
     assert result.exit_code == 1
     assert "Telegram alerts are disabled in config." in result.stdout
+
+
+def test_alert_set_disabled_does_not_require_secret_files(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    token_file = tmp_path / "secrets" / "telegram_bot_token"
+    chat_id_file = tmp_path / "secrets" / "telegram_chat_id"
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "alert",
+            "set",
+            "--disabled",
+            "--telegram-token-file",
+            str(token_file),
+            "--telegram-chat-id-file",
+            str(chat_id_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = yaml.safe_load(config.read_text(encoding="utf-8"))
+    telegram = payload["notifications"]["telegram"]
+    assert telegram["enabled"] is False
+    assert telegram["bot_token_file"] == str(token_file)
+    assert telegram["chat_id_file"] == str(chat_id_file)

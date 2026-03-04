@@ -21,6 +21,8 @@ SUSPICIOUS_PATH_PATTERNS = (
     "../",
 )
 
+SUSPICIOUS_HTTP_STATUSES = {"403", "404", "444"}
+
 
 class SecurityReportError(RuntimeError):
     pass
@@ -47,7 +49,6 @@ def render_fail2ban_jail(*, ssh_port: int, nginx_log_path: Path, fail2ban_log_pa
     return "\n".join(
         [
             "[DEFAULT]",
-            "backend = systemd",
             "banaction = ufw",
             "findtime = 10m",
             "maxretry = 5",
@@ -56,10 +57,12 @@ def render_fail2ban_jail(*, ssh_port: int, nginx_log_path: Path, fail2ban_log_pa
             "",
             "[sshd]",
             "enabled = true",
+            "backend = systemd",
             f"port = {ssh_port}",
             "",
             "[larops-nginx-scan]",
             "enabled = true",
+            "backend = auto",
             "port = http,https",
             "filter = larops-nginx-scan",
             f"logpath = {nginx_log_path}",
@@ -136,8 +139,8 @@ def apply_security_install_plan(plan: SecurityInstallPlan) -> dict[str, Any]:
     for command in plan.ufw_commands:
         run_command(command, check=True)
 
-    run_command(["systemctl", "enable", "--now", plan.fail2ban_service], check=False)
-    run_command(["systemctl", "restart", plan.fail2ban_service], check=False)
+    run_command(["systemctl", "enable", "--now", plan.fail2ban_service], check=True)
+    run_command(["systemctl", "restart", plan.fail2ban_service], check=True)
     return {
         "ufw_commands_executed": plan.ufw_commands,
         "fail2ban_jail_path": str(plan.fail2ban_jail_path),
@@ -270,7 +273,7 @@ def build_security_report(
         ip, path, status = _extract_nginx_line(line)
         if not ip or not path or not status:
             continue
-        if status != "404":
+        if status not in SUSPICIOUS_HTTP_STATUSES:
             continue
         if not _is_suspicious_path(path):
             continue

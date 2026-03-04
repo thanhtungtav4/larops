@@ -211,3 +211,35 @@ def test_monitor_fim_run_clean_when_no_changes(tmp_path: Path) -> None:
     lines = [json.loads(line) for line in run.stdout.strip().splitlines()]
     payload = lines[-1]["result"]
     assert payload["has_changes"] is False
+
+
+def test_monitor_fim_init_glob_includes_nested_files(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    app_root = tmp_path / "app"
+    nested_dir = app_root / "config" / "packages"
+    nested_dir.mkdir(parents=True, exist_ok=True)
+    (nested_dir / "security.php").write_text("<?php return ['x' => 1];\n", encoding="utf-8")
+    baseline_file = tmp_path / "fim-baseline.json"
+
+    init = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "monitor",
+            "fim",
+            "init",
+            "--root",
+            str(app_root),
+            "--baseline-file",
+            str(baseline_file),
+            "--pattern",
+            "config/*",
+            "--apply",
+        ],
+    )
+    assert init.exit_code == 0
+    lines = [json.loads(line) for line in init.stdout.strip().splitlines()]
+    result = lines[-1]["result"]
+    assert result["file_count"] == 1

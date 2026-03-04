@@ -6,6 +6,7 @@ from subprocess import CompletedProcess
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.core.shell import ShellCommandError
 
 runner = CliRunner()
 
@@ -75,11 +76,47 @@ def test_security_install_apply_writes_fail2ban_files(tmp_path: Path, monkeypatc
     assert result.exit_code == 0
     assert jail_file.exists()
     assert filter_file.exists()
+    jail_body = jail_file.read_text(encoding="utf-8")
+    assert "[DEFAULT]\nbanaction = ufw" in jail_body
+    assert "[sshd]\nenabled = true\nbackend = systemd" in jail_body
+    assert "[larops-nginx-scan]\nenabled = true\nbackend = auto" in jail_body
     assert ["ufw", "allow", "22/tcp"] in calls
     assert ["ufw", "allow", "80/tcp"] in calls
     assert ["ufw", "allow", "443/tcp"] in calls
     assert ["ufw", "--force", "enable"] in calls
+    assert ["systemctl", "enable", "--now", "fail2ban"] in calls
     assert ["systemctl", "restart", "fail2ban"] in calls
+
+
+def test_security_install_apply_fails_when_fail2ban_systemctl_fails(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    jail_file = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    filter_file = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:3] == ["systemctl", "enable", "--now"]:
+            if check:
+                raise ShellCommandError("command failed (1): systemctl enable --now fail2ban")
+            return CompletedProcess(command, 1, stdout="", stderr="boom")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "security",
+            "install",
+            "--fail2ban-jail-file",
+            str(jail_file),
+            "--fail2ban-filter-file",
+            str(filter_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "systemctl enable --now fail2ban" in result.stdout
 
 
 def test_security_status_json(tmp_path: Path, monkeypatch) -> None:
@@ -120,8 +157,9 @@ def test_security_report_parses_logs(tmp_path: Path) -> None:
         "\n".join(
             [
                 '1.2.3.4 - - [03/Mar/2026:10:00:00 +0700] "GET /.env HTTP/1.1" 404 150 "-" "curl/8.0"',
-                '1.2.3.4 - - [03/Mar/2026:10:00:01 +0700] "GET /wp-login.php HTTP/1.1" 404 150 "-" "curl/8.0"',
+                '1.2.3.4 - - [03/Mar/2026:10:00:01 +0700] "GET /wp-login.php HTTP/1.1" 403 150 "-" "curl/8.0"',
                 '9.9.9.9 - - [03/Mar/2026:10:00:02 +0700] "GET /health HTTP/1.1" 200 10 "-" "curl/8.0"',
+                '5.6.7.8 - - [03/Mar/2026:10:00:03 +0700] "GET /phpmyadmin HTTP/1.1" 444 0 "-" "curl/8.0"',
             ]
         )
         + "\n",
@@ -147,7 +185,7 @@ def test_security_report_parses_logs(tmp_path: Path) -> None:
     lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
     report = lines[-1]["report"]
     assert report["fail2ban"]["top_banned_ips"][0]["ip"] == "1.2.3.4"
-    assert report["nginx_scan"]["suspicious_404_total"] == 2
+    assert report["nginx_scan"]["suspicious_404_total"] == 3
 
 
 def test_security_report_since_window_filters_old_lines(tmp_path: Path) -> None:

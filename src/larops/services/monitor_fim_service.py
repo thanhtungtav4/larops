@@ -34,6 +34,10 @@ def _collect_files(root: Path, patterns: list[str]) -> list[Path]:
             for path in root.glob(normalized):
                 if path.is_file():
                     files.add(path)
+                elif path.is_dir():
+                    for nested in path.rglob("*"):
+                        if nested.is_file():
+                            files.add(nested)
             continue
         target = root / normalized
         if target.is_file():

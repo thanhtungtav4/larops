@@ -48,14 +48,15 @@ def configure_telegram_alert(
     telegram_chat_id_file: Path,
     enabled: bool,
 ) -> dict[str, Any]:
-    if telegram_token is None and not telegram_token_file.exists():
-        raise AlertServiceError(
-            "Telegram token is missing. Provide --telegram-token or create --telegram-token-file first."
-        )
-    if telegram_chat_id is None and not telegram_chat_id_file.exists():
-        raise AlertServiceError(
-            "Telegram chat id is missing. Provide --telegram-chat-id or create --telegram-chat-id-file first."
-        )
+    if enabled:
+        if telegram_token is None and not telegram_token_file.exists():
+            raise AlertServiceError(
+                "Telegram token is missing. Provide --telegram-token or create --telegram-token-file first."
+            )
+        if telegram_chat_id is None and not telegram_chat_id_file.exists():
+            raise AlertServiceError(
+                "Telegram chat id is missing. Provide --telegram-chat-id or create --telegram-chat-id-file first."
+            )
 
     if telegram_token is not None:
         _write_secret(telegram_token_file, telegram_token)
