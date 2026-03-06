@@ -77,6 +77,40 @@ def test_load_config_reads_queue_and_failed_job_checks(tmp_path: Path) -> None:
     assert config.doctor.failed_job_checks[0].max_count == 0
 
 
+def test_load_config_reads_backup_offsite_and_encryption(tmp_path: Path) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text(
+        "\n".join(
+            [
+                "backups:",
+                "  encryption:",
+                "    enabled: true",
+                "    passphrase: secret-passphrase",
+                "    cipher: aes-256-cbc",
+                "  offsite:",
+                "    enabled: true",
+                "    provider: s3",
+                "    bucket: larops-backups",
+                "    prefix: prod/backups",
+                "    region: auto",
+                "    endpoint_url: https://example.r2.cloudflarestorage.com",
+                "    access_key_id: key-id",
+                "    secret_access_key: secret-key",
+                "    retention_days: 14",
+                "    stale_hours: 12",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(file)
+    assert config.backups.encryption.enabled is True
+    assert config.backups.encryption.passphrase == "secret-passphrase"
+    assert config.backups.offsite.enabled is True
+    assert config.backups.offsite.bucket == "larops-backups"
+    assert config.backups.offsite.retention_days == 14
+    assert config.backups.offsite.stale_hours == 12
+
+
 def test_load_config_env_overrides_telegram_from_secret_files(tmp_path: Path, monkeypatch) -> None:
     file = tmp_path / "larops.yaml"
     file.write_text(

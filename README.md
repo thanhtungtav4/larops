@@ -224,6 +224,27 @@ notifications:
     min_severity: error
     batch_size: 20
 
+backups:
+  encryption:
+    enabled: false
+    passphrase: ""
+    passphrase_file: /etc/larops/secrets/backup_passphrase
+    cipher: aes-256-cbc
+  offsite:
+    enabled: false
+    provider: s3
+    bucket: ""
+    prefix: larops/backups
+    region: us-east-1
+    endpoint_url: ""
+    access_key_id: ""
+    access_key_id_file: /etc/larops/secrets/offsite_access_key_id
+    secret_access_key: ""
+    secret_access_key_file: /etc/larops/secrets/offsite_secret_access_key
+    storage_class: STANDARD
+    retention_days: 30
+    stale_hours: 24
+
 doctor:
   app_command_checks: []
   heartbeat_checks: []
@@ -354,6 +375,8 @@ larops db backup example.com --database appdb --retain-count 10 --apply
 larops db status example.com
 larops db verify --backup-file /path/backup.sql.gz
 larops db restore-verify example.com --backup-file /path/backup.sql.gz --database appdb --apply
+larops db offsite status example.com
+larops db offsite restore-verify example.com --database appdb --apply
 larops db auto-backup enable example.com --database appdb --apply
 larops db auto-backup status example.com
 larops db list-backups example.com
@@ -367,8 +390,16 @@ export LAROPS_DB_PASSWORD="strong-password"
 larops db credential set example.com --engine postgres --user appuser --apply
 larops db backup example.com --engine postgres --database appdb --retain-count 10 --apply
 larops db restore-verify example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
+larops db offsite restore-verify example.com --engine postgres --database appdb --apply
 larops db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
+
+Offsite backup notes:
+
+- `db backup` will automatically encrypt and upload to configured S3-compatible storage when `backups.offsite.enabled=true` and `backups.encryption.enabled=true`.
+- Supported current backend: `s3` (works for AWS S3, Cloudflare R2, MinIO, and compatible endpoints).
+- Encryption is client-side via `openssl` before upload.
+- Remote retention is pruned by age using `backups.offsite.retention_days`.
 
 ### 7. Health checks
 
@@ -517,7 +548,9 @@ larops db credential show example.com
 larops db backup example.com --database appdb --apply
 larops db backup example.com --engine postgres --database appdb --apply
 larops db status example.com
+larops db offsite status example.com
 larops db verify --backup-file /path/backup.sql.gz
+larops db offsite restore-verify example.com --database appdb --apply
 larops db auto-backup enable example.com --database appdb --apply
 larops db auto-backup status example.com
 larops db list-backups example.com

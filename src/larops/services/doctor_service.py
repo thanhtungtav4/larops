@@ -9,6 +9,7 @@ from pathlib import Path
 
 from larops.config import (
     DoctorAppCommandCheckConfig,
+    BackupOffsiteConfig,
     DoctorFailedJobCheckConfig,
     DoctorHeartbeatCheckConfig,
     DoctorQueueBacklogCheckConfig,
@@ -17,6 +18,7 @@ from larops.core.shell import run_command
 from larops.services.app_lifecycle import get_app_paths
 from larops.services.db_service import manifest_path, restore_verify_report_path
 from larops.services.db_systemd import db_backup_service_name, db_backup_timer_name
+from larops.services.db_offsite_service import DbOffsiteError, offsite_status
 from larops.services.monitor_systemd import monitor_service_watch_timer_name
 from larops.services.runtime_process import status_process
 
@@ -302,6 +304,7 @@ def run_app_checks(
     queue_backlog_checks: list[DoctorQueueBacklogCheckConfig],
     failed_job_checks: list[DoctorFailedJobCheckConfig],
     runtime_policies: dict[str, dict],
+    offsite_config: BackupOffsiteConfig | None = None,
 ) -> list[DoctorCheck]:
     paths = get_app_paths(base_releases_path, state_path, domain)
     checks = []
@@ -350,6 +353,24 @@ def run_app_checks(
                 detail="auto backup timer not configured",
             )
         )
+    if offsite_config is not None and offsite_config.enabled:
+        try:
+            remote = offsite_status(domain=domain, offsite_config=offsite_config, stale_hours=offsite_config.stale_hours)
+            checks.append(
+                DoctorCheck(
+                    name=f"backup-offsite:{domain}",
+                    status=str(remote["status"]),
+                    detail=f"{remote['bucket']} {remote['prefix']} latest={remote['latest_object']}",
+                )
+            )
+        except DbOffsiteError as exc:
+            checks.append(
+                DoctorCheck(
+                    name=f"backup-offsite:{domain}",
+                    status="error",
+                    detail=str(exc),
+                )
+            )
     for process_type in ("worker", "scheduler", "horizon"):
         runtime_check = _runtime_process_check(
             state_path=state_path,

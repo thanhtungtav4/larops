@@ -93,6 +93,29 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
                 "batch_size": app_ctx.config.notifications.telegram.batch_size,
             }
         },
+        "backups": {
+            "encryption": {
+                "enabled": app_ctx.config.backups.encryption.enabled,
+                "passphrase": "",
+                "passphrase_file": app_ctx.config.backups.encryption.passphrase_file,
+                "cipher": app_ctx.config.backups.encryption.cipher,
+            },
+            "offsite": {
+                "enabled": app_ctx.config.backups.offsite.enabled,
+                "provider": app_ctx.config.backups.offsite.provider,
+                "bucket": app_ctx.config.backups.offsite.bucket,
+                "prefix": app_ctx.config.backups.offsite.prefix,
+                "region": app_ctx.config.backups.offsite.region,
+                "endpoint_url": app_ctx.config.backups.offsite.endpoint_url,
+                "access_key_id": "",
+                "access_key_id_file": app_ctx.config.backups.offsite.access_key_id_file,
+                "secret_access_key": "",
+                "secret_access_key_file": app_ctx.config.backups.offsite.secret_access_key_file,
+                "storage_class": app_ctx.config.backups.offsite.storage_class,
+                "retention_days": app_ctx.config.backups.offsite.retention_days,
+                "stale_hours": app_ctx.config.backups.offsite.stale_hours,
+            },
+        },
         "doctor": {
             "app_command_checks": [
                 {

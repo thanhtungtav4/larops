@@ -63,6 +63,27 @@ notifications:
     min_severity: error
     batch_size: 20
 
+backups:
+  encryption:
+    enabled: false
+    passphrase: ""
+    passphrase_file: /etc/larops/secrets/backup_passphrase
+    cipher: aes-256-cbc
+  offsite:
+    enabled: false
+    provider: s3
+    bucket: ""
+    prefix: larops/backups
+    region: us-east-1
+    endpoint_url: ""
+    access_key_id: ""
+    access_key_id_file: /etc/larops/secrets/offsite_access_key_id
+    secret_access_key: ""
+    secret_access_key_file: /etc/larops/secrets/offsite_secret_access_key
+    storage_class: STANDARD
+    retention_days: 30
+    stale_hours: 24
+
 doctor:
   app_command_checks: []
   heartbeat_checks: []

@@ -78,6 +78,26 @@ notifications:
     chat_id_file: /etc/larops/secrets/telegram_chat_id
     min_severity: error
     batch_size: 20
+backups:
+  encryption:
+    enabled: false
+    passphrase: ""
+    passphrase_file: /etc/larops/secrets/backup_passphrase
+    cipher: aes-256-cbc
+  offsite:
+    enabled: false
+    provider: s3
+    bucket: ""
+    prefix: larops/backups
+    region: us-east-1
+    endpoint_url: ""
+    access_key_id: ""
+    access_key_id_file: /etc/larops/secrets/offsite_access_key_id
+    secret_access_key: ""
+    secret_access_key_file: /etc/larops/secrets/offsite_secret_access_key
+    storage_class: STANDARD
+    retention_days: 30
+    stale_hours: 24
 doctor:
   app_command_checks: []
   heartbeat_checks: []
@@ -109,6 +129,40 @@ LAROPS_TELEGRAM_BOT_TOKEN_FILE=/etc/larops/secrets/telegram_bot_token
 LAROPS_TELEGRAM_CHAT_ID_FILE=/etc/larops/secrets/telegram_chat_id
 ENV
 sudo chmod 600 /etc/larops/telegram.env
+```
+
+## 5) Configure backup encryption + offsite storage
+
+Create offsite secrets:
+
+```bash
+sudo install -d -m 700 /etc/larops/secrets
+openssl rand -base64 48 | sudo tee /etc/larops/secrets/backup_passphrase >/dev/null
+echo "R2_OR_S3_ACCESS_KEY" | sudo tee /etc/larops/secrets/offsite_access_key_id >/dev/null
+echo "R2_OR_S3_SECRET_KEY" | sudo tee /etc/larops/secrets/offsite_secret_access_key >/dev/null
+sudo chmod 600 /etc/larops/secrets/backup_passphrase /etc/larops/secrets/offsite_access_key_id /etc/larops/secrets/offsite_secret_access_key
+```
+
+Example config for Cloudflare R2 / S3-compatible object storage:
+
+```yaml
+backups:
+  encryption:
+    enabled: true
+    passphrase_file: /etc/larops/secrets/backup_passphrase
+    cipher: aes-256-cbc
+  offsite:
+    enabled: true
+    provider: s3
+    bucket: larops-backups
+    prefix: production
+    region: auto
+    endpoint_url: https://<accountid>.r2.cloudflarestorage.com
+    access_key_id_file: /etc/larops/secrets/offsite_access_key_id
+    secret_access_key_file: /etc/larops/secrets/offsite_secret_access_key
+    storage_class: STANDARD
+    retention_days: 30
+    stale_hours: 24
 ```
 
 ## 5) App lifecycle
@@ -152,8 +206,10 @@ sudo --preserve-env=LAROPS_DB_PASSWORD larops --config /etc/larops/larops.yaml \
 
 sudo larops --config /etc/larops/larops.yaml db backup example.com --database appdb --retain-count 10 --apply
 sudo larops --config /etc/larops/larops.yaml db status example.com
+sudo larops --config /etc/larops/larops.yaml db offsite status example.com
 sudo larops --config /etc/larops/larops.yaml db verify --backup-file /path/backup.sql.gz
 sudo larops --config /etc/larops/larops.yaml db restore-verify example.com --backup-file /path/backup.sql.gz --database appdb --apply
+sudo larops --config /etc/larops/larops.yaml db offsite restore-verify example.com --database appdb --apply
 sudo larops --config /etc/larops/larops.yaml db auto-backup enable example.com --database appdb --apply
 sudo larops --config /etc/larops/larops.yaml db auto-backup status example.com
 sudo larops --config /etc/larops/larops.yaml db list-backups example.com
@@ -168,6 +224,7 @@ sudo --preserve-env=LAROPS_DB_PASSWORD larops --config /etc/larops/larops.yaml \
 
 sudo larops --config /etc/larops/larops.yaml db backup example.com --engine postgres --database appdb --retain-count 10 --apply
 sudo larops --config /etc/larops/larops.yaml db restore-verify example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
+sudo larops --config /etc/larops/larops.yaml db offsite restore-verify example.com --engine postgres --database appdb --apply
 sudo larops --config /etc/larops/larops.yaml db auto-backup enable example.com --engine postgres --database appdb --apply
 sudo larops --config /etc/larops/larops.yaml db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```

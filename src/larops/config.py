@@ -93,6 +93,34 @@ class NotificationsConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
 
+class BackupEncryptionConfig(BaseModel):
+    enabled: bool = False
+    passphrase: str = ""
+    passphrase_file: str = ""
+    cipher: str = "aes-256-cbc"
+
+
+class BackupOffsiteConfig(BaseModel):
+    enabled: bool = False
+    provider: str = "s3"
+    bucket: str = ""
+    prefix: str = "larops/backups"
+    region: str = "us-east-1"
+    endpoint_url: str = ""
+    access_key_id: str = ""
+    access_key_id_file: str = ""
+    secret_access_key: str = ""
+    secret_access_key_file: str = ""
+    storage_class: str = "STANDARD"
+    retention_days: int = 30
+    stale_hours: int = 24
+
+
+class BackupsConfig(BaseModel):
+    encryption: BackupEncryptionConfig = Field(default_factory=BackupEncryptionConfig)
+    offsite: BackupOffsiteConfig = Field(default_factory=BackupOffsiteConfig)
+
+
 class DoctorAppCommandCheckConfig(BaseModel):
     name: str
     command: str
@@ -134,6 +162,7 @@ class AppConfig(BaseModel):
     runtime_policy: RuntimePolicyConfig = Field(default_factory=RuntimePolicyConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    backups: BackupsConfig = Field(default_factory=BackupsConfig)
     doctor: DoctorConfig = Field(default_factory=DoctorConfig)
 
 
@@ -172,6 +201,12 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
     telegram_chat_id_file = os.getenv("LAROPS_TELEGRAM_CHAT_ID_FILE")
     telegram_min_severity = os.getenv("LAROPS_TELEGRAM_MIN_SEVERITY")
     telegram_batch_size = os.getenv("LAROPS_TELEGRAM_BATCH_SIZE")
+    backup_passphrase = os.getenv("LAROPS_BACKUP_PASSPHRASE")
+    backup_passphrase_file = os.getenv("LAROPS_BACKUP_PASSPHRASE_FILE")
+    offsite_access_key_id = os.getenv("LAROPS_OFFSITE_ACCESS_KEY_ID")
+    offsite_access_key_id_file = os.getenv("LAROPS_OFFSITE_ACCESS_KEY_ID_FILE")
+    offsite_secret_access_key = os.getenv("LAROPS_OFFSITE_SECRET_ACCESS_KEY")
+    offsite_secret_access_key_file = os.getenv("LAROPS_OFFSITE_SECRET_ACCESS_KEY_FILE")
 
     updated = config.model_copy(deep=True)
     if env:
@@ -199,6 +234,18 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
             updated.notifications.telegram.batch_size = max(1, int(telegram_batch_size))
         except ValueError as exc:
             raise ConfigError(f"Invalid LAROPS_TELEGRAM_BATCH_SIZE: {telegram_batch_size}") from exc
+    if backup_passphrase:
+        updated.backups.encryption.passphrase = backup_passphrase
+    if backup_passphrase_file:
+        updated.backups.encryption.passphrase_file = backup_passphrase_file
+    if offsite_access_key_id:
+        updated.backups.offsite.access_key_id = offsite_access_key_id
+    if offsite_access_key_id_file:
+        updated.backups.offsite.access_key_id_file = offsite_access_key_id_file
+    if offsite_secret_access_key:
+        updated.backups.offsite.secret_access_key = offsite_secret_access_key
+    if offsite_secret_access_key_file:
+        updated.backups.offsite.secret_access_key_file = offsite_secret_access_key_file
 
     if updated.notifications.telegram.bot_token_file:
         updated.notifications.telegram.bot_token = _read_secret(
@@ -209,6 +256,21 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
         updated.notifications.telegram.chat_id = _read_secret(
             updated.notifications.telegram.chat_id_file,
             "Telegram chat id",
+        )
+    if updated.backups.encryption.passphrase_file:
+        updated.backups.encryption.passphrase = _read_secret(
+            updated.backups.encryption.passphrase_file,
+            "Backup encryption passphrase",
+        )
+    if updated.backups.offsite.access_key_id_file:
+        updated.backups.offsite.access_key_id = _read_secret(
+            updated.backups.offsite.access_key_id_file,
+            "Offsite access key id",
+        )
+    if updated.backups.offsite.secret_access_key_file:
+        updated.backups.offsite.secret_access_key = _read_secret(
+            updated.backups.offsite.secret_access_key_file,
+            "Offsite secret access key",
         )
 
     return updated

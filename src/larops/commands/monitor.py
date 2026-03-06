@@ -593,6 +593,7 @@ def app_run(
                     "scheduler": app_ctx.config.runtime_policy.scheduler.model_dump(),
                     "horizon": app_ctx.config.runtime_policy.horizon.model_dump(),
                 },
+                offsite_config=app_ctx.config.backups.offsite,
                 monitor_state_file=resolved_state_file,
             )
     except (CommandLockError, MonitorAppError, RuntimeError) as exc:

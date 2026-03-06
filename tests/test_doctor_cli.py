@@ -241,3 +241,58 @@ def test_run_host_checks_includes_service_watchdog_timer(monkeypatch, tmp_path: 
     )
     names = {check.name for check in checks}
     assert "systemd:larops-monitor-service.timer" in names
+
+
+def test_doctor_run_reports_offsite_backup_status(tmp_path: Path, monkeypatch) -> None:
+    config_file = tmp_path / "larops.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 5",
+                "  health_check_path: /up",
+                "systemd:",
+                "  manage: false",
+                f"  unit_dir: {tmp_path / 'units'}",
+                "  user: www-data",
+                "backups:",
+                "  offsite:",
+                "    enabled: true",
+                "    provider: s3",
+                "    bucket: larops-backups",
+                "    prefix: prod/backups",
+                "    region: auto",
+                "    endpoint_url: https://example.r2.cloudflarestorage.com",
+                "    access_key_id: key-id",
+                "    secret_access_key: secret-key",
+                "    stale_hours: 12",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    create = runner.invoke(app, ["--config", str(config_file), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+
+    monkeypatch.setattr(
+        "larops.services.doctor_service.offsite_status",
+        lambda **_: {
+            "status": "ok",
+            "bucket": "larops-backups",
+            "prefix": "prod/backups/demo.test",
+            "count": 1,
+            "latest_object": "prod/backups/demo.test/demo_test.sql.gz.enc",
+            "age_hours": 2.0,
+        },
+    )
+
+    result = runner.invoke(app, ["--config", str(config_file), "--json", "doctor", "run", "demo.test"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip())
+    names = {check["name"] for check in payload["report"]["checks"]}
+    assert "backup-offsite:demo.test" in names

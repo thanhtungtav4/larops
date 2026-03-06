@@ -6,6 +6,7 @@ from typing import Any
 
 from larops.config import DoctorAppCommandCheckConfig, DoctorHeartbeatCheckConfig
 from larops.config import DoctorFailedJobCheckConfig, DoctorQueueBacklogCheckConfig
+from larops.config import BackupOffsiteConfig
 from larops.services.doctor_service import run_app_checks, summarize
 
 
@@ -44,6 +45,7 @@ def run_app_monitor(
     queue_backlog_checks: list[DoctorQueueBacklogCheckConfig],
     failed_job_checks: list[DoctorFailedJobCheckConfig],
     runtime_policies: dict[str, dict],
+    offsite_config: BackupOffsiteConfig,
     monitor_state_file: Path,
 ) -> dict[str, Any]:
     report_checks = run_app_checks(
@@ -57,6 +59,7 @@ def run_app_monitor(
         queue_backlog_checks=queue_backlog_checks,
         failed_job_checks=failed_job_checks,
         runtime_policies=runtime_policies,
+        offsite_config=offsite_config,
     )
     report = summarize(report_checks)
     previous_state = load_monitor_state(monitor_state_file)

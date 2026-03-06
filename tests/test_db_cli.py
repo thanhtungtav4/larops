@@ -39,6 +39,47 @@ def write_config(tmp_path: Path) -> Path:
     return config_file
 
 
+def write_offsite_config(tmp_path: Path) -> Path:
+    config_file = tmp_path / "larops-offsite.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 5",
+                "  health_check_path: /up",
+                "systemd:",
+                "  manage: false",
+                f"  unit_dir: {tmp_path / 'units'}",
+                "  user: root",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+                "backups:",
+                "  encryption:",
+                "    enabled: true",
+                "    passphrase: secret-passphrase",
+                "    cipher: aes-256-cbc",
+                "  offsite:",
+                "    enabled: true",
+                "    provider: s3",
+                "    bucket: larops-backups",
+                "    prefix: prod/backups",
+                "    region: auto",
+                "    endpoint_url: https://example.r2.cloudflarestorage.com",
+                "    access_key_id: key-id",
+                "    secret_access_key: secret-key",
+                "    retention_days: 14",
+                "    stale_hours: 12",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_file
+
+
 def write_secret(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -251,6 +292,54 @@ def test_db_backup_apply_hardens_backup_dir_permissions(tmp_path: Path, monkeypa
     assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
     assert created_backup is not None and created_backup.exists()
     assert created_backup.with_name(f"{created_backup.name}.json").exists()
+
+
+def test_db_backup_apply_uploads_offsite_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    config = write_offsite_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+    backup_dir = tmp_path / "state" / "backups" / "demo.test"
+    uploaded: dict[str, object] = {}
+
+    def fake_run_backup(command: list[str]) -> str:
+        shell = command[-1]
+        matched = re.search(r">\s+(.+)$", shell)
+        assert matched is not None
+        backup_file = Path(shlex.split(matched.group(1))[0])
+        backup_file.parent.mkdir(parents=True, exist_ok=True)
+        backup_file.write_text("backup", encoding="utf-8")
+        return ""
+
+    def fake_upload_offsite_backup(**kwargs: object) -> dict[str, object]:
+        uploaded.update(kwargs)
+        return {"object_key": "prod/backups/demo.test/demo_test.sql.gz.enc"}
+
+    monkeypatch.setattr("larops.commands.db.run_backup", fake_run_backup)
+    monkeypatch.setattr("larops.commands.db.upload_offsite_backup", fake_upload_offsite_backup)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "db",
+            "backup",
+            "demo.test",
+            "--database",
+            "appdb",
+            "--credential-file",
+            str(secret),
+            "--target-dir",
+            str(backup_dir),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert uploaded["domain"] == "demo.test"
+    assert "backup_file" in uploaded
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["offsite"]["object_key"] == "prod/backups/demo.test/demo_test.sql.gz.enc"
 
 
 def test_db_credential_set_postgres_and_show(tmp_path: Path) -> None:
@@ -494,6 +583,69 @@ def test_db_restore_verify_writes_report(tmp_path: Path, monkeypatch) -> None:
     assert report_file.exists()
     report_payload = json.loads(report_file.read_text(encoding="utf-8"))
     assert report_payload["table_count"] == 4
+
+
+def test_db_status_includes_offsite_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    config = write_offsite_config(tmp_path)
+    backup_dir = tmp_path / "state" / "backups" / "demo.test"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_file = backup_dir / "demo_test_20260306T000000Z.sql.gz"
+    with gzip.open(backup_file, "wb") as handle:
+        handle.write(b"backup")
+
+    monkeypatch.setattr(
+        "larops.commands.db.offsite_status",
+        lambda **_: {
+            "status": "ok",
+            "bucket": "larops-backups",
+            "prefix": "prod/backups/demo.test",
+            "count": 2,
+            "latest_object": "prod/backups/demo.test/demo_test.sql.gz.enc",
+            "age_hours": 1.2,
+        },
+    )
+    result = runner.invoke(app, ["--config", str(config), "--json", "db", "status", "demo.test", "--target-dir", str(backup_dir)])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip())
+    assert payload["status_report"]["offsite"]["latest_object"] == "prod/backups/demo.test/demo_test.sql.gz.enc"
+
+
+def test_db_offsite_restore_verify_uses_remote_artifact(tmp_path: Path, monkeypatch) -> None:
+    config = write_offsite_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+
+    def fake_offsite_restore_verify(**_: object) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "engine": "mysql",
+            "offsite_object_key": "prod/backups/demo.test/demo_test.sql.gz.enc",
+            "verify_database": "appdb_verify_20260306",
+            "table_count": 4,
+            "verified_at": "2026-03-06T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("larops.commands.db.offsite_restore_verify", fake_offsite_restore_verify)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "db",
+            "offsite",
+            "restore-verify",
+            "demo.test",
+            "--database",
+            "appdb",
+            "--credential-file",
+            str(secret),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["verification"]["offsite_object_key"] == "prod/backups/demo.test/demo_test.sql.gz.enc"
 
 
 def test_db_backup_plan_mode_postgres(tmp_path: Path) -> None:

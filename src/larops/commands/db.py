@@ -34,6 +34,12 @@ from larops.services.db_service import (
     write_mysql_credentials,
     write_postgres_credentials,
 )
+from larops.services.db_offsite_service import (
+    DbOffsiteError,
+    offsite_restore_verify,
+    offsite_status,
+    upload_offsite_backup,
+)
 from larops.services.db_systemd import (
     DbAutoBackupError,
     disable_db_backup_timer,
@@ -44,8 +50,10 @@ from larops.services.db_systemd import (
 db_app = typer.Typer(help="Manage database backup and restore.")
 credential_app = typer.Typer(help="Manage secure DB credentials.")
 auto_backup_app = typer.Typer(help="Manage DB auto-backup timer.")
+offsite_app = typer.Typer(help="Manage encrypted offsite backups.")
 db_app.add_typer(credential_app, name="credential")
 db_app.add_typer(auto_backup_app, name="auto-backup")
+db_app.add_typer(offsite_app, name="offsite")
 
 
 def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, metadata: dict | None = None) -> None:
@@ -199,6 +207,11 @@ def backup(
     ),
     target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
     retain_count: int = typer.Option(10, "--retain-count", help="Keep at most this many backups per domain."),
+    skip_offsite_upload: bool = typer.Option(
+        False,
+        "--skip-offsite-upload",
+        help="Skip configured offsite upload for this backup run.",
+    ),
     apply: bool = typer.Option(False, "--apply", help="Apply backup operation."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
@@ -232,6 +245,7 @@ def backup(
         credential_file=str(secret_file),
         command=command_preview,
         retain_count=retain_count,
+        offsite_enabled=app_ctx.config.backups.offsite.enabled and not skip_offsite_upload,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -248,6 +262,7 @@ def backup(
         engine=normalized_engine,
     )
 
+    offsite_result = None
     try:
         with CommandLock("db-backup"):
             output = run_backup(command)
@@ -258,8 +273,26 @@ def backup(
                 database=database,
             )
             deleted = prune_backups(backup_dir=backup_dir, retain_count=retain_count)
+            offsite_result = None
+            if app_ctx.config.backups.offsite.enabled and not skip_offsite_upload:
+                offsite_result = upload_offsite_backup(
+                    domain=domain,
+                    backup_file=backup_file,
+                    encryption_config=app_ctx.config.backups.encryption,
+                    offsite_config=app_ctx.config.backups.offsite,
+                )
     except (CommandLockError, ShellCommandError, DbServiceError) as exc:
         _emit(app_ctx, "error", "db.backup.failed", "DB backup failed.", {"error": str(exc), "domain": domain})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+    except DbOffsiteError as exc:
+        _emit(
+            app_ctx,
+            "error",
+            "db.backup.offsite_failed",
+            "DB backup offsite upload failed.",
+            {"error": str(exc), "domain": domain, "file": str(backup_file)},
+        )
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=1) from exc
 
@@ -268,7 +301,13 @@ def backup(
         "info",
         "db.backup.completed",
         "DB backup completed.",
-        {"domain": domain, "file": str(backup_file), "manifest": str(manifest), "deleted": deleted},
+        {
+            "domain": domain,
+            "file": str(backup_file),
+            "manifest": str(manifest),
+            "deleted": deleted,
+            "offsite": offsite_result,
+        },
     )
     app_ctx.emit_output(
         "ok",
@@ -276,6 +315,7 @@ def backup(
         backup_file=str(backup_file),
         manifest_file=str(manifest),
         deleted_backups=deleted,
+        offsite=offsite_result,
         output=output,
     )
 
@@ -354,6 +394,11 @@ def status(
     domain: str = typer.Argument(..., help="Application domain."),
     target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
     stale_hours: int = typer.Option(24, "--stale-hours", help="Warn if latest backup is older than this many hours."),
+    offsite_stale_hours: int = typer.Option(
+        24,
+        "--offsite-stale-hours",
+        help="Warn if latest offsite backup is older than this many hours.",
+    ),
 ) -> None:
     app_ctx: AppContext = ctx.obj
     if stale_hours < 1:
@@ -365,6 +410,18 @@ def status(
         latest_backup = Path(summary["latest_backup"])
         summary["manifest"] = read_backup_manifest(latest_backup)
         summary["manifest_file"] = str(manifest_path(latest_backup))
+    if app_ctx.config.backups.offsite.enabled:
+        try:
+            summary["offsite"] = offsite_status(
+                domain=domain,
+                offsite_config=app_ctx.config.backups.offsite,
+                stale_hours=offsite_stale_hours,
+            )
+            if summary["status"] == "ok" and summary["offsite"]["status"] != "ok":
+                summary["status"] = summary["offsite"]["status"]
+        except DbOffsiteError as exc:
+            summary["offsite"] = {"status": "error", "error": str(exc)}
+            summary["status"] = "error"
     app_ctx.emit_output(summary["status"], f"DB backup status for {domain}", domain=domain, status_report=summary)
 
 
@@ -614,3 +671,137 @@ def auto_backup_status(
         domain=domain,
     )
     app_ctx.emit_output("ok", f"DB auto-backup status for {domain}", auto_backup=result)
+
+
+@offsite_app.command("upload")
+def offsite_upload(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    backup_file: Path = typer.Option(..., "--backup-file", help="Local backup file path.", dir_okay=False),
+    apply: bool = typer.Option(False, "--apply", help="Upload backup to offsite storage."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    app_ctx.emit_output(
+        "ok",
+        f"DB offsite upload plan prepared for {domain}",
+        domain=domain,
+        backup_file=str(backup_file),
+        bucket=app_ctx.config.backups.offsite.bucket,
+        prefix=app_ctx.config.backups.offsite.prefix,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock(f"db-offsite-upload-{domain}"):
+            result = upload_offsite_backup(
+                domain=domain,
+                backup_file=backup_file,
+                encryption_config=app_ctx.config.backups.encryption,
+                offsite_config=app_ctx.config.backups.offsite,
+            )
+    except (CommandLockError, DbOffsiteError) as exc:
+        _emit(app_ctx, "error", "db.offsite.upload.failed", "DB offsite upload failed.", {"error": str(exc), "domain": domain})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(app_ctx, "info", "db.offsite.upload.completed", "DB offsite upload completed.", {"domain": domain, **result})
+    app_ctx.emit_output("ok", f"DB offsite upload completed for {domain}", offsite=result)
+
+
+@offsite_app.command("status")
+def offsite_status_cmd(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    stale_hours: int = typer.Option(24, "--stale-hours", help="Warn if latest offsite backup is older than this many hours."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        result = offsite_status(
+            domain=domain,
+            offsite_config=app_ctx.config.backups.offsite,
+            stale_hours=stale_hours,
+        )
+    except DbOffsiteError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+    app_ctx.emit_output(result["status"], f"DB offsite status for {domain}", offsite=result)
+
+
+@offsite_app.command("restore-verify")
+def offsite_restore_verify_cmd(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
+    database: str = typer.Option(..., "--database", help="Source database name."),
+    object_key: str | None = typer.Option(None, "--object-key", help="Explicit offsite object key to restore."),
+    verify_database: str | None = typer.Option(None, "--verify-database", help="Temporary database name for restore verification."),
+    credential_file: Path | None = typer.Option(None, "--credential-file", help="Credential file path.", dir_okay=False),
+    apply: bool = typer.Option(False, "--apply", help="Download, decrypt, and restore-verify from offsite storage."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    secret_file = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
+    report_file = restore_verify_report_path(Path(app_ctx.config.state_path), domain)
+    app_ctx.emit_output(
+        "ok",
+        f"DB offsite restore-verify plan prepared for {domain}",
+        domain=domain,
+        engine=normalized_engine,
+        database=database,
+        object_key=object_key,
+        verify_database=verify_database,
+        credential_file=str(secret_file),
+        bucket=app_ctx.config.backups.offsite.bucket,
+        report_file=str(report_file),
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock(f"db-offsite-restore-verify-{domain}"):
+            result = offsite_restore_verify(
+                domain=domain,
+                database=database,
+                credential_file=secret_file,
+                engine=normalized_engine,
+                encryption_config=app_ctx.config.backups.encryption,
+                offsite_config=app_ctx.config.backups.offsite,
+                object_key=object_key,
+                verify_database=verify_database,
+            )
+            report = write_restore_verify_report(
+                state_path=Path(app_ctx.config.state_path),
+                domain=domain,
+                payload=result,
+            )
+    except (CommandLockError, DbOffsiteError, DbServiceError, ShellCommandError) as exc:
+        _emit(
+            app_ctx,
+            "error",
+            "db.offsite.restore_verify.failed",
+            "DB offsite restore verify failed.",
+            {"error": str(exc), "domain": domain},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(
+        app_ctx,
+        "info",
+        "db.offsite.restore_verify.completed",
+        "DB offsite restore verify completed.",
+        {"domain": domain, "report_file": str(report), "object_key": result.get("offsite_object_key")},
+    )
+    app_ctx.emit_output("ok", f"DB offsite restore verify completed for {domain}", verification=result, report_file=str(report))

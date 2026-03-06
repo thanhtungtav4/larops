@@ -40,6 +40,7 @@ def run(
                     "scheduler": app_ctx.config.runtime_policy.scheduler.model_dump(),
                     "horizon": app_ctx.config.runtime_policy.horizon.model_dump(),
                 },
+                offsite_config=app_ctx.config.backups.offsite,
             )
         )
     report = summarize(checks)
@@ -76,6 +77,7 @@ def quick(
                     "scheduler": app_ctx.config.runtime_policy.scheduler.model_dump(),
                     "horizon": app_ctx.config.runtime_policy.horizon.model_dump(),
                 },
+                offsite_config=app_ctx.config.backups.offsite,
             )
         )
     report = summarize(checks)
