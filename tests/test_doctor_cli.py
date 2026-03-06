@@ -351,3 +351,62 @@ def test_doctor_run_reports_offsite_backup_status(tmp_path: Path, monkeypatch) -
     payload = json.loads(result.stdout.strip())
     names = {check["name"] for check in payload["report"]["checks"]}
     assert "backup-offsite:demo.test" in names
+
+
+def test_doctor_fleet_reports_registered_apps(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    monkeypatch.setattr("larops.commands.doctor.list_registered_apps", lambda _: ["alpha.test", "beta.test"])
+    monkeypatch.setattr(
+        "larops.commands.doctor._host_report",
+        lambda _app_ctx, quick: {
+            "overall": "ok",
+            "checks": [{"name": "systemd:larops-monitor-service.timer", "status": "ok", "detail": "active=active, enabled=enabled"}],
+            "counts": {"ok": 1, "warn": 0, "error": 0},
+        },
+    )
+    monkeypatch.setattr(
+        "larops.commands.doctor._app_report",
+        lambda _app_ctx, domain: {
+            "overall": "warn" if domain == "alpha.test" else "error",
+            "checks": [{"name": f"app:{domain}:current", "status": "warn" if domain == "alpha.test" else "error", "detail": "stub"}],
+            "counts": {"ok": 0, "warn": 1 if domain == "alpha.test" else 0, "error": 1 if domain == "beta.test" else 0},
+        },
+    )
+
+    result = runner.invoke(app, ["--config", str(config), "--json", "doctor", "fleet"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip())
+    report = payload["report"]
+    assert report["overall"] == "error"
+    assert report["registered_apps"] == ["alpha.test", "beta.test"]
+    targets = {item["target"]: item for item in report["targets"]}
+    assert targets["host"]["overall"] == "ok"
+    assert targets["alpha.test"]["overall"] == "warn"
+    assert targets["beta.test"]["overall"] == "error"
+    assert "checks" not in targets["host"]
+
+
+def test_doctor_fleet_include_checks_and_skip_host(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    monkeypatch.setattr("larops.commands.doctor.list_registered_apps", lambda _: ["alpha.test"])
+    monkeypatch.setattr(
+        "larops.commands.doctor._app_report",
+        lambda _app_ctx, domain: {
+            "overall": "ok",
+            "checks": [{"name": f"app:{domain}:metadata", "status": "ok", "detail": "stub"}],
+            "counts": {"ok": 1, "warn": 0, "error": 0},
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "doctor", "fleet", "--skip-host", "--include-checks"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip())
+    report = payload["report"]
+    assert report["target_count"] == 1
+    assert report["targets"][0]["target"] == "alpha.test"
+    assert report["targets"][0]["checks"][0]["name"] == "app:alpha.test:metadata"

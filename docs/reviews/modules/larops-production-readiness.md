@@ -2,6 +2,36 @@
 
 Ngày review: 2026-03-06
 
+## Cập nhật trạng thái: 2026-03-06
+
+Tài liệu này chứa review gốc ở thời điểm LarOps còn thiếu nhiều capability production-critical. Sau các batch implementation đã merge tới commit `d47b712`, trạng thái hiện tại đã thay đổi đáng kể.
+
+Verdict hiện tại:
+
+- `single-node serious production`: `A-`
+- `multi-node / fleet / platform-grade production`: `chưa đạt`
+
+Những khoảng hở lớn trong review gốc đã được đóng:
+
+- deploy có `build`, `pre-activate`, `post-activate`, `verify`, health gate và rollback có điều kiện
+- shared state cho `.env`, `storage`, `bootstrap/cache`
+- runtime refresh sau deploy/rollback
+- worker replicas tách unit, reconcile riêng, `status` không còn auto-heal ngầm
+- backup có timer, retention, verify, restore-verify
+- offsite backup có encryption, HMAC integrity check, remote retention, restore-verify
+- host watchdog + app watchdog + Telegram alert
+- `doctor` đã có runtime, heartbeat, queue backlog, failed jobs, backup/offsite checks
+- `doctor fleet` đã có summary toàn host + toàn bộ app trên máy
+
+Các khoảng trống còn lại để vượt `A-`:
+
+1. central metrics / log aggregation / tracing
+2. multi-node / rolling deploy / artifact promotion
+3. host tuning sâu cho nginx, php-fpm, redis, mariadb/postgres
+4. secret rotation workflow ở mức platform
+
+Khi đọc phần issue/backlog phía dưới, coi đó là baseline historical review. Nhiều issue trong đó đã được xử lý một phần hoặc hoàn tất.
+
 🚨 CẢNH BÁO NGHIÊM TRỌNG
 
 LarOps hiện có nền CLI, test, runbook, security baseline và runtime control khá tốt cho môi trường lab/staging hoặc VPS đơn có operator biết rõ giới hạn của tool. Tuy nhiên, phần quan trọng nhất của production readiness cho Laravel vẫn còn hở ở đúng các điểm dễ gây downtime và lỗi âm thầm:

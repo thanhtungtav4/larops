@@ -3,6 +3,39 @@
 Ngày tạo: 2026-03-06
 Nguồn: [larops-production-readiness.md](/Volumes/Manager%20Data/Tool/larops/docs/reviews/modules/larops-production-readiness.md)
 
+## Cập nhật trạng thái: 2026-03-06
+
+Backlog này được sinh từ review gốc khi LarOps còn ở mức thấp hơn nhiều. Sau các batch implementation đã merge tới commit `d47b712`, phần lớn các mục `OPS-001` đến `OPS-015` không còn ở trạng thái backlog nguyên bản.
+
+Đã hoàn tất hoặc gần hoàn tất:
+
+- `OPS-001` deploy semantics + release phases
+- `OPS-003` runtime refresh sau deploy/rollback
+- `OPS-004` shared state model
+- `OPS-005` worker replica unit model
+- `OPS-006` tách reconcile khỏi `status`
+- `OPS-007` backup/restore readiness, timer, retention, restore-verify
+- `OPS-008` Telegram adapter rotation/truncate safety
+- `OPS-010` health gate thật trong deploy
+- `OPS-013` site restore workflow
+- `OPS-014` doctor mở rộng đáng kể, thêm `doctor fleet`
+- `OPS-015` bootstrap secret hygiene
+
+Đã cải thiện đáng kể nhưng vẫn còn việc tiếp:
+
+- `OPS-002` scheduler semantics cần review thêm nếu muốn tiến gần platform-grade
+- `OPS-009` installer upgrade atomicity vẫn chưa phải versioned release manager hoàn chỉnh
+- `OPS-011` host provisioning/tuning vẫn thiên về install package hơn là full host control plane
+- `OPS-012` edge / SSL / site webroot management vẫn chưa là platform layer hoàn chỉnh
+
+Backlog ưu tiên hiện tại nên đổi thành:
+
+1. central metrics / central logs / tracing
+2. off-host backup reporting ở mức fleet
+3. rolling / multi-node deploy
+4. host tuning modules cho nginx/php-fpm/redis/db
+5. platform-grade secret lifecycle
+
 ## Mục tiêu backlog
 
 Chuyển các finding `OPS-001` đến `OPS-015` thành backlog implementation có thể thực thi theo thứ tự ưu tiên production:

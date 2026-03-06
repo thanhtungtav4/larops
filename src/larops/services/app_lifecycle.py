@@ -43,6 +43,13 @@ def save_metadata(metadata_path: Path, payload: dict) -> None:
     metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def list_registered_apps(state_path: Path) -> list[str]:
+    apps_dir = state_path / "apps"
+    if not apps_dir.exists():
+        return []
+    return sorted(item.stem for item in apps_dir.glob("*.json") if item.is_file())
+
+
 def initialize_app(paths: AppPaths, payload: dict, *, overwrite: bool = False) -> None:
     if paths.metadata.exists() and not overwrite:
         raise AppLifecycleError("Application already exists. Use --force to recreate metadata.")

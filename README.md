@@ -46,6 +46,7 @@ Main goals:
 - Security baseline controls (`security install/status/report`, `alert set/test`).
 - Monitor controls (`monitor scan run`, `monitor fim init/run`, `monitor service run`, `monitor app run`).
 - Health checks (`doctor run`, `doctor quick`).
+- Fleet-wide health summary (`doctor fleet`).
 - Runtime protection with restart policy matrix and auto-heal.
 
 ## Requirements
@@ -407,6 +408,8 @@ Offsite backup notes:
 ```bash
 larops doctor quick
 larops --json doctor run example.com
+larops --json doctor fleet
+larops --json doctor fleet --quick --include-checks
 ```
 
 Optional app-level probes via `doctor.app_command_checks`, `doctor.heartbeat_checks`, `doctor.queue_backlog_checks`, and `doctor.failed_job_checks`:

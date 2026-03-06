@@ -337,6 +337,8 @@ sudo larops --config /etc/larops/larops.yaml security report --since 24h
 ```bash
 sudo larops --config /etc/larops/larops.yaml doctor quick host
 sudo larops --config /etc/larops/larops.yaml doctor run example.com
+sudo larops --config /etc/larops/larops.yaml doctor fleet
+sudo larops --config /etc/larops/larops.yaml doctor fleet --quick --include-checks
 sudo larops --config /etc/larops/larops.yaml worker reconcile example.com --apply
 sudo larops --config /etc/larops/larops.yaml scheduler reconcile example.com --apply
 ```
