@@ -88,6 +88,11 @@ def _systemd_status(unit: str) -> dict[str, Any]:
     }
 
 
+def _systemd_unit_known(unit: str) -> bool:
+    status = _systemd_status(unit)
+    return status["active"] not in {"unknown", "not-found", ""} or status["enabled"] not in {"unknown", "not-found", ""}
+
+
 def enable_ssl_auto_renew(
     *,
     unit_dir: Path,
@@ -144,7 +149,11 @@ def disable_ssl_auto_renew(
 ) -> dict[str, Any]:
     removed_paths: list[str] = []
     if systemd_manage:
-        run_command(["systemctl", "disable", "--now", ssl_renew_timer_name()], check=False)
+        try:
+            if _systemd_unit_known(ssl_renew_timer_name()):
+                _run_systemctl(["disable", "--now", ssl_renew_timer_name()], check=True)
+        except ShellCommandError as exc:
+            raise SslAutoRenewError(str(exc)) from exc
 
     if remove_units:
         for path in (_service_unit_path(unit_dir), _timer_unit_path(unit_dir)):

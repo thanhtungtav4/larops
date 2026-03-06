@@ -18,6 +18,7 @@ from larops.services.monitor_fim_service import (
 )
 from larops.services.monitor_service_watch import (
     MonitorServiceWatchError,
+    is_service_healthy,
     resolve_service_targets,
     watch_services,
 )
@@ -413,7 +414,7 @@ def service_run(
                 message=f"Service {item['service']} is active again.",
                 metadata=metadata,
             )
-        if item["after"]["active"] != "active":
+        if not is_service_healthy(str(item["after"]["active"])):
             status = "error"
 
     app_ctx.emit_output(status, "Monitor service completed.", result=result)

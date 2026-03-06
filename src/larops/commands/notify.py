@@ -216,7 +216,11 @@ def daemon_disable(
     if app_ctx.dry_run or not apply:
         app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
         return
-    result = disable_telegram_daemon(systemd_manage=app_ctx.config.systemd.manage)
+    try:
+        result = disable_telegram_daemon(systemd_manage=app_ctx.config.systemd.manage)
+    except NotifySystemdError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
     app_ctx.emit_output("ok", "Telegram daemon disabled.", daemon=result)
 
 

@@ -414,6 +414,46 @@ def test_monitor_service_run_profile_resolves_php_fpm_unit(tmp_path: Path, monke
     assert services == ["nginx", "php8.3-fpm", "mariadb", "redis-server"]
 
 
+def test_monitor_service_run_does_not_restart_activating_service(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    def fake_run_command(
+        command: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: int | None = None,
+    ) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "restart"]:
+            raise AssertionError("activating service should not be restarted")
+        if command[:2] == ["systemctl", "is-active"] and command[2] == "mariadb":
+            return CompletedProcess(command, 0, stdout="activating\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"] and command[2] == "mariadb":
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.monitor_service_watch.run_command", fake_run_command)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "monitor",
+            "service",
+            "run",
+            "--service",
+            "mariadb",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "ok"
+    assert payload["result"]["services"][0]["transition"] == "steady"
+    assert payload["result"]["services"][0]["action"] == "none"
+
+
 def test_monitor_app_run_emits_alert_once_for_failed_check(tmp_path: Path) -> None:
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(

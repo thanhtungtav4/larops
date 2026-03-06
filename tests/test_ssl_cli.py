@@ -1,8 +1,10 @@
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.core.shell import ShellCommandError
 
 runner = CliRunner()
 
@@ -127,3 +129,28 @@ def test_ssl_auto_renew_disable_remove_units(tmp_path: Path) -> None:
     timer = tmp_path / "units" / "larops-ssl-renew.timer"
     assert not service.exists()
     assert not timer.exists()
+
+
+def test_ssl_auto_renew_disable_fails_when_systemctl_fails(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("  manage: false", "  manage: true"),
+        encoding="utf-8",
+    )
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"]:
+            return CompletedProcess(command, 0, stdout="active\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        if command[:2] == ["systemctl", "disable"]:
+            if check:
+                raise ShellCommandError("command failed (1): systemctl disable --now larops-ssl-renew.timer")
+            return CompletedProcess(command, 1, stdout="", stderr="boom")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.ssl_auto_renew.run_command", fake_run_command)
+
+    result = runner.invoke(app, ["--config", str(config), "ssl", "auto-renew", "disable", "--apply"])
+    assert result.exit_code == 1
+    assert "systemctl disable --now larops-ssl-renew.timer" in result.stdout

@@ -44,6 +44,7 @@ Main goals:
 - Database backup/restore and credentials (`db backup`, `db restore`, `db credential`).
 - Event-stream based notifications (`notify telegram run-once/watch/daemon`).
 - Security baseline controls (`security install/status/report`, `alert set/test`).
+- Preventive hardening controls (`secure ssh`, `secure nginx`).
 - Monitor controls (`monitor scan run`, `monitor fim init/run`, `monitor service run`, `monitor app run`).
 - Health checks (`doctor run`, `doctor quick`).
 - Fleet-wide health summary (`doctor fleet`).
@@ -591,6 +592,8 @@ larops security install --apply
 larops security status
 larops security report
 larops security report --since 24h
+larops secure ssh --ssh-key-only --apply
+larops secure nginx --server-config-file /etc/nginx/sites-enabled/example.conf --apply
 ```
 
 Monitor:

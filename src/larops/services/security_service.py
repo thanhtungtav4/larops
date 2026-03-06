@@ -179,11 +179,61 @@ def collect_security_status(
     }
 
 
+def determine_security_status_level(report: dict[str, Any]) -> str:
+    if int(report["ufw"]["exit_code"]) != 0:
+        return "error"
+    ufw_raw = str(report["ufw"]["raw"]).lower()
+    if "status: inactive" in ufw_raw:
+        return "error"
+
+    if int(report["fail2ban"]["exit_code"]) != 0:
+        return "error"
+    fail2ban_raw = str(report["fail2ban"]["raw"]).lower()
+    if re.search(r"number of jail:\s*0\b", fail2ban_raw):
+        return "error"
+
+    files = report.get("files", {})
+    if any(not bool(item.get("exists")) for item in files.values() if isinstance(item, dict)):
+        return "error"
+
+    jails = report.get("jails", {})
+    if any(int(item.get("exit_code", 1)) != 0 for item in jails.values() if isinstance(item, dict)):
+        return "error"
+
+    return "ok"
+
+
 def _tail_lines(path: Path, *, max_lines: int) -> list[str]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         return list(deque(handle, maxlen=max(1, max_lines)))
+
+
+def _select_lines_for_window(
+    path: Path,
+    *,
+    cutoff: datetime | None,
+    max_lines: int,
+    timestamp_extractor: Any,
+) -> tuple[list[str], int]:
+    if not path.exists():
+        return [], 0
+    if cutoff is None:
+        lines = _tail_lines(path, max_lines=max_lines)
+        return lines, len(lines)
+
+    selected: list[str] = []
+    scanned = 0
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            scanned += 1
+            line = raw_line.rstrip("\n")
+            timestamp = timestamp_extractor(line)
+            if timestamp is None or timestamp < cutoff:
+                continue
+            selected.append(line)
+    return selected, scanned
 
 
 def _extract_nginx_line(line: str) -> tuple[str | None, str | None, str | None]:
@@ -247,13 +297,14 @@ def build_security_report(
     cutoff = now_utc - window if window is not None else None
 
     ban_counter: Counter[str] = Counter()
-    fail2ban_lines = _tail_lines(fail2ban_log_path, max_lines=max_lines)
+    fail2ban_lines, fail2ban_scanned = _select_lines_for_window(
+        fail2ban_log_path,
+        cutoff=cutoff,
+        max_lines=max_lines,
+        timestamp_extractor=_extract_fail2ban_timestamp,
+    )
     fail2ban_in_window = 0
     for line in fail2ban_lines:
-        if cutoff is not None:
-            timestamp = _extract_fail2ban_timestamp(line)
-            if timestamp is None or timestamp < cutoff:
-                continue
         fail2ban_in_window += 1
         matched = re.search(r"\bBan\s+(\S+)\b", line)
         if matched:
@@ -262,13 +313,14 @@ def build_security_report(
     path_counter: Counter[str] = Counter()
     ip_counter: Counter[str] = Counter()
     suspicious_total = 0
-    nginx_lines = _tail_lines(nginx_log_path, max_lines=max_lines)
+    nginx_lines, nginx_scanned = _select_lines_for_window(
+        nginx_log_path,
+        cutoff=cutoff,
+        max_lines=max_lines,
+        timestamp_extractor=_extract_nginx_timestamp,
+    )
     nginx_in_window = 0
     for line in nginx_lines:
-        if cutoff is not None:
-            timestamp = _extract_nginx_timestamp(line)
-            if timestamp is None or timestamp < cutoff:
-                continue
         nginx_in_window += 1
         ip, path, status = _extract_nginx_line(line)
         if not ip or not path or not status:
@@ -291,12 +343,12 @@ def build_security_report(
         },
         "fail2ban": {
             "log_path": str(fail2ban_log_path),
-            "lines_scanned": len(fail2ban_lines),
+            "lines_scanned": fail2ban_scanned,
             "top_banned_ips": [{"ip": ip, "count": count} for ip, count in ban_counter.most_common(max(1, top))],
         },
         "nginx_scan": {
             "log_path": str(nginx_log_path),
-            "lines_scanned": len(nginx_lines),
+            "lines_scanned": nginx_scanned,
             "suspicious_404_total": suspicious_total,
             "top_paths": [{"path": path, "count": count} for path, count in path_counter.most_common(max(1, top))],
             "top_ips": [{"ip": ip, "count": count} for ip, count in ip_counter.most_common(max(1, top))],

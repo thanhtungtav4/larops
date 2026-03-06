@@ -37,7 +37,8 @@ _PHP_FPM_CANDIDATES = [
     "php-fpm",
 ]
 
-_KNOWN_ACTIVE_STATES = {"active", "activating", "inactive", "failed", "deactivating"}
+_HEALTHY_ACTIVE_STATES = {"active", "activating", "reloading"}
+_KNOWN_ACTIVE_STATES = _HEALTHY_ACTIVE_STATES | {"inactive", "failed", "deactivating"}
 _KNOWN_ENABLED_STATES = {"enabled", "disabled", "static", "indirect", "generated", "masked"}
 
 
@@ -57,6 +58,10 @@ def _service_exists(service: str) -> bool:
     active = _systemctl_text(["is-active", service])
     enabled = _systemctl_text(["is-enabled", service])
     return active in _KNOWN_ACTIVE_STATES or enabled in _KNOWN_ENABLED_STATES
+
+
+def is_service_healthy(active_state: str) -> bool:
+    return active_state.strip().lower() in _HEALTHY_ACTIVE_STATES
 
 
 def _resolve_php_fpm_service() -> str:
@@ -161,7 +166,7 @@ def watch_services(
             except ValueError:
                 last_restart_attempt_at = None
 
-        if before_active != "active":
+        if not is_service_healthy(before_active):
             should_restart = restart_down_services
             if should_restart and last_restart_attempt_at is not None:
                 elapsed = (now - last_restart_attempt_at).total_seconds()
@@ -176,7 +181,7 @@ def watch_services(
                 except ShellCommandError:
                     pass
                 after = _systemctl_state(service)
-                if after["active"] == "active":
+                if is_service_healthy(after["active"]):
                     transition = "restarted"
                 else:
                     transition = "restart_failed"
@@ -187,7 +192,7 @@ def watch_services(
                 transition = "steady"
             else:
                 transition = "steady"
-        elif previous.get("active") and previous.get("active") != "active":
+        elif previous.get("active") and not is_service_healthy(str(previous.get("active"))):
             transition = "recovered"
 
         previous["active"] = after["active"]

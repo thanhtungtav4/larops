@@ -14,6 +14,7 @@ from larops.commands.monitor import monitor_app
 from larops.commands.notify import notify_app
 from larops.commands.observability import observability_app
 from larops.commands.scheduler import scheduler_app
+from larops.commands.secure import secure_app
 from larops.commands.security import security_app
 from larops.commands.site import site_app
 from larops.commands.ssl import ssl_app
@@ -81,6 +82,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(notify_app, name="notify")
 app.add_typer(observability_app, name="observability")
 app.add_typer(doctor_app, name="doctor")
+app.add_typer(secure_app, name="secure")
 app.add_typer(security_app, name="security")
 app.add_typer(alert_app, name="alert")
 app.add_typer(monitor_app, name="monitor")

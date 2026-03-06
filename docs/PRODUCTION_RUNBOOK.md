@@ -239,6 +239,8 @@ sudo larops --config /etc/larops/larops.yaml db restore example.com --engine pos
 ```bash
 sudo larops --config /etc/larops/larops.yaml notify telegram daemon enable --apply
 sudo larops --config /etc/larops/larops.yaml notify telegram daemon status
+sudo larops --config /etc/larops/larops.yaml secure ssh --ssh-key-only --apply
+sudo larops --config /etc/larops/larops.yaml secure nginx --server-config-file /etc/nginx/sites-enabled/example.com.conf --apply
 ```
 
 Smoke test:

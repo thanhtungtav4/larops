@@ -15,6 +15,7 @@ from larops.services.security_service import (
     build_security_install_plan,
     build_security_report,
     collect_security_status,
+    determine_security_status_level,
 )
 
 security_app = typer.Typer(help="Install and inspect baseline host security controls.")
@@ -161,9 +162,7 @@ def status(
         fail2ban_jail_path=fail2ban_jail_file,
         fail2ban_filter_path=fail2ban_filter_file,
     )
-    status_level = "ok"
-    if report["ufw"]["exit_code"] != 0 or report["fail2ban"]["exit_code"] != 0:
-        status_level = "warn"
+    status_level = determine_security_status_level(report)
     app_ctx.emit_output(status_level, "Security status.", report=report)
 
 

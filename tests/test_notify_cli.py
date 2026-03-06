@@ -1,8 +1,10 @@
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.core.shell import ShellCommandError
 
 runner = CliRunner()
 
@@ -36,6 +38,15 @@ def write_config(tmp_path: Path) -> Path:
                 "    batch_size: 20",
             ]
         ),
+        encoding="utf-8",
+    )
+    return config_file
+
+
+def write_managed_config(tmp_path: Path) -> Path:
+    config_file = write_config(tmp_path)
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace("  manage: false", "  manage: true"),
         encoding="utf-8",
     )
     return config_file
@@ -96,3 +107,24 @@ def test_notify_telegram_daemon_enable_apply_unmanaged_writes_unit(tmp_path: Pat
     assert unit_path.exists()
     body = unit_path.read_text(encoding="utf-8")
     assert "--interval 7 --iterations 0 --apply --batch-size 10" in body
+
+
+def test_notify_telegram_daemon_disable_fails_when_systemctl_fails(tmp_path: Path, monkeypatch) -> None:
+    config = write_managed_config(tmp_path)
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"]:
+            return CompletedProcess(command, 0, stdout="active\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        if command[:2] == ["systemctl", "disable"]:
+            if check:
+                raise ShellCommandError("command failed (1): systemctl disable --now larops-notify-telegram.service")
+            return CompletedProcess(command, 1, stdout="", stderr="boom")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.notify_systemd.run_command", fake_run_command)
+
+    result = runner.invoke(app, ["--config", str(config), "notify", "telegram", "daemon", "disable", "--apply"])
+    assert result.exit_code == 1
+    assert "systemctl disable --now larops-notify-telegram.service" in result.stdout

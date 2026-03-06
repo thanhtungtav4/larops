@@ -138,6 +138,46 @@ def test_security_status_json(tmp_path: Path, monkeypatch) -> None:
     assert "Status: active" in payload["ufw"]["raw"]
 
 
+def test_security_status_errors_when_jail_is_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    jail_file = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    filter_file = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    jail_file.parent.mkdir(parents=True, exist_ok=True)
+    filter_file.parent.mkdir(parents=True, exist_ok=True)
+    jail_file.write_text("[sshd]\nenabled=true\n", encoding="utf-8")
+    filter_file.write_text("[Definition]\nfailregex = test\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:2] == ["ufw", "status"]:
+            return CompletedProcess(command, 0, stdout="Status: active\n", stderr="")
+        if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
+            return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "sshd"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: sshd\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "larops-nginx-scan"]:
+            return CompletedProcess(command, 255, stdout="", stderr="Sorry but the jail does not exist\n")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "security",
+            "status",
+            "--fail2ban-jail-file",
+            str(jail_file),
+            "--fail2ban-filter-file",
+            str(filter_file),
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+
+
 def test_security_report_parses_logs(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     fail2ban_log = tmp_path / "fail2ban.log"
@@ -240,6 +280,66 @@ def test_security_report_since_window_filters_old_lines(tmp_path: Path) -> None:
     assert report["window"]["since"] == "1h"
     assert report["fail2ban"]["top_banned_ips"][0]["ip"] == "1.1.1.1"
     assert report["nginx_scan"]["suspicious_404_total"] == 1
+
+
+def test_security_report_since_scans_full_window_not_tail_only(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    fail2ban_log = tmp_path / "fail2ban.log"
+    nginx_log = tmp_path / "access.log"
+    now_utc = datetime.now(UTC)
+    recent_fail2ban = now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    older_in_window_fail2ban = (now_utc - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
+    recent_nginx = now_utc.astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+    older_in_window_nginx = (now_utc - timedelta(minutes=20)).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+
+    fail2ban_log.write_text(
+        "\n".join(
+            [
+                f"{older_in_window_fail2ban},001 fail2ban.actions [123]: NOTICE [sshd] Ban 8.8.8.8",
+                f"{recent_fail2ban},001 fail2ban.actions [123]: NOTICE [sshd] Ban 1.1.1.1",
+                "2026-03-01 01:00:00,001 fail2ban.actions [123]: NOTICE [sshd] Ban 9.9.9.9",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    nginx_log.write_text(
+        "\n".join(
+            [
+                f'8.8.8.8 - - [{older_in_window_nginx}] "GET /.env HTTP/1.1" 404 150 "-" "curl/8.0"',
+                f'1.1.1.1 - - [{recent_nginx}] "GET /wp-login.php HTTP/1.1" 403 150 "-" "curl/8.0"',
+                '9.9.9.9 - - [01/Mar/2026:01:00:00 +0700] "GET /phpmyadmin HTTP/1.1" 444 0 "-" "curl/8.0"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "security",
+            "report",
+            "--fail2ban-log-path",
+            str(fail2ban_log),
+            "--nginx-log-path",
+            str(nginx_log),
+            "--since",
+            "1h",
+            "--max-lines",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    report = lines[-1]["report"]
+    assert report["fail2ban"]["lines_scanned"] == 3
+    assert report["nginx_scan"]["lines_scanned"] == 3
+    assert [item["ip"] for item in report["fail2ban"]["top_banned_ips"]] == ["8.8.8.8", "1.1.1.1"]
+    assert report["nginx_scan"]["suspicious_404_total"] == 2
 
 
 def test_security_report_invalid_since_fails(tmp_path: Path) -> None:

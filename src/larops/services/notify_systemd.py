@@ -104,6 +104,11 @@ def _systemd_status(service: str) -> dict[str, Any]:
     }
 
 
+def _systemd_unit_known(service: str) -> bool:
+    status = _systemd_status(service)
+    return status["active"] not in {"unknown", "not-found", ""} or status["enabled"] not in {"unknown", "not-found", ""}
+
+
 def enable_telegram_daemon(
     *,
     unit_dir: Path,
@@ -152,7 +157,11 @@ def enable_telegram_daemon(
 def disable_telegram_daemon(*, systemd_manage: bool) -> dict[str, Any]:
     service = telegram_service_name()
     if systemd_manage:
-        run_command(["systemctl", "disable", "--now", service], check=False)
+        try:
+            if _systemd_unit_known(service):
+                _run_systemctl(["disable", "--now", service], check=True)
+        except ShellCommandError as exc:
+            raise NotifySystemdError(str(exc)) from exc
     return {
         "service_name": service,
         "enabled": False,
