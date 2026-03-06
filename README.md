@@ -398,8 +398,9 @@ Offsite backup notes:
 
 - `db backup` will automatically encrypt and upload to configured S3-compatible storage when `backups.offsite.enabled=true` and `backups.encryption.enabled=true`.
 - Supported current backend: `s3` (works for AWS S3, Cloudflare R2, MinIO, and compatible endpoints).
-- Encryption is client-side via `openssl` before upload.
+- Encryption is client-side via `openssl` before upload, and LarOps now stores an HMAC alongside the encrypted artifact to detect remote tampering during restore verification.
 - Remote retention is pruned by age using `backups.offsite.retention_days`.
+- `db offsite status` and `doctor run` will flag incomplete remote uploads when an encrypted object exists without its manifest pair.
 
 ### 7. Health checks
 

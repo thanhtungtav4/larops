@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -26,6 +27,7 @@ from larops.services.db_service import (
     read_backup_manifest,
     restore_verify_backup,
     restore_verify_report_path,
+    failed_restore_verify_report,
     run_backup,
     run_restore,
     verify_backup,
@@ -516,12 +518,26 @@ def restore_verify(
                 payload=result,
             )
     except (CommandLockError, DbServiceError, ShellCommandError) as exc:
+        report = write_restore_verify_report(
+            state_path=Path(app_ctx.config.state_path),
+            domain=domain,
+            payload=failed_restore_verify_report(
+                error=str(exc),
+                context={
+                    "engine": normalized_engine,
+                    "backup_file": str(backup_file),
+                    "database": database,
+                    "verify_database": verify_database,
+                    "failed_at": datetime.now(UTC).isoformat(),
+                },
+            ),
+        )
         _emit(
             app_ctx,
             "error",
             "db.restore_verify.failed",
             "DB restore verify failed.",
-            {"error": str(exc), "domain": domain},
+            {"error": str(exc), "domain": domain, "report_file": str(report)},
         )
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=1) from exc
@@ -787,12 +803,26 @@ def offsite_restore_verify_cmd(
                 payload=result,
             )
     except (CommandLockError, DbOffsiteError, DbServiceError, ShellCommandError) as exc:
+        report = write_restore_verify_report(
+            state_path=Path(app_ctx.config.state_path),
+            domain=domain,
+            payload=failed_restore_verify_report(
+                error=str(exc),
+                context={
+                    "engine": normalized_engine,
+                    "database": database,
+                    "verify_database": verify_database,
+                    "object_key": object_key,
+                    "failed_at": datetime.now(UTC).isoformat(),
+                },
+            ),
+        )
         _emit(
             app_ctx,
             "error",
             "db.offsite.restore_verify.failed",
             "DB offsite restore verify failed.",
-            {"error": str(exc), "domain": domain},
+            {"error": str(exc), "domain": domain, "report_file": str(report)},
         )
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=1) from exc

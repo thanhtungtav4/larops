@@ -399,6 +399,17 @@ def write_restore_verify_report(*, state_path: Path, domain: str, payload: dict)
     return path
 
 
+def failed_restore_verify_report(*, error: str, context: dict | None = None) -> dict:
+    payload = {
+        "status": "error",
+        "verified_at": datetime.now(UTC).isoformat(),
+        "error": error,
+    }
+    if context:
+        payload.update(context)
+    return payload
+
+
 def _temporary_verify_database_name(database: str) -> str:
     safe_database = _validate_database_name(database)
     suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S")

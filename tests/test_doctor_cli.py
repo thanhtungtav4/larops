@@ -58,6 +58,31 @@ def test_doctor_run_reports_missing_restore_verify_for_app(tmp_path: Path) -> No
     assert "backup-verify:demo.test" in names
 
 
+def test_doctor_run_reports_failed_restore_verify_as_error(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+    report_file = tmp_path / "state" / "backups" / "demo.test" / "last_restore_verify.json"
+    report_file.parent.mkdir(parents=True, exist_ok=True)
+    report_file.write_text(
+        json.dumps(
+            {
+                "status": "error",
+                "verified_at": "2026-03-06T00:00:00+00:00",
+                "error": "restore verification failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["--config", str(config), "--json", "doctor", "run", "demo.test"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip())
+    checks = {check["name"]: check for check in payload["report"]["checks"]}
+    assert checks["backup-verify:demo.test"]["status"] == "error"
+    assert "restore verification failed" in checks["backup-verify:demo.test"]["detail"]
+
+
 def test_doctor_run_executes_configured_app_command_checks(tmp_path: Path) -> None:
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(
@@ -241,6 +266,36 @@ def test_run_host_checks_includes_service_watchdog_timer(monkeypatch, tmp_path: 
     )
     names = {check.name for check in checks}
     assert "systemd:larops-monitor-service.timer" in names
+
+
+def test_run_host_checks_marks_failed_timers_as_error(monkeypatch, tmp_path: Path) -> None:
+    def fake_run_command(
+        command: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: int | None = None,
+    ) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"] and command[2].endswith(".timer"):
+            return CompletedProcess(command, 3, stdout="failed\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"] and command[2].endswith(".timer"):
+            return CompletedProcess(command, 1, stdout="disabled\n", stderr="")
+        if command[:2] == ["systemctl", "is-active"]:
+            return CompletedProcess(command, 0, stdout="inactive\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            return CompletedProcess(command, 1, stdout="disabled\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.doctor_service.run_command", fake_run_command)
+
+    checks = run_host_checks(
+        state_path=tmp_path / "state",
+        events_path=tmp_path / "events.jsonl",
+        quick=False,
+        unit_dir=tmp_path / "units",
+        systemd_manage=True,
+    )
+    timer_checks = {check.name: check for check in checks if check.name.endswith(".timer")}
+    assert timer_checks["systemd:larops-monitor-service.timer"].status == "error"
 
 
 def test_doctor_run_reports_offsite_backup_status(tmp_path: Path, monkeypatch) -> None:

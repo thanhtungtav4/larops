@@ -9,7 +9,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from larops.cli import app
-from larops.services.db_service import build_backup_command, build_restore_command
+from larops.services.db_offsite_service import DbOffsiteError
+from larops.services.db_service import DbServiceError, build_backup_command, build_restore_command
 
 runner = CliRunner()
 
@@ -585,6 +586,44 @@ def test_db_restore_verify_writes_report(tmp_path: Path, monkeypatch) -> None:
     assert report_payload["table_count"] == 4
 
 
+def test_db_restore_verify_failure_writes_error_report(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+    backup_file = tmp_path / "backup.sql.gz"
+    with gzip.open(backup_file, "wb") as handle:
+        handle.write(b"backup")
+
+    def fake_restore_verify_backup(**_: object) -> dict:
+        raise DbServiceError("restore verification failed")
+
+    monkeypatch.setattr("larops.commands.db.restore_verify_backup", fake_restore_verify_backup)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "db",
+            "restore-verify",
+            "demo.test",
+            "--database",
+            "appdb",
+            "--backup-file",
+            str(backup_file),
+            "--credential-file",
+            str(secret),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 1
+    report_file = tmp_path / "state" / "backups" / "demo.test" / "last_restore_verify.json"
+    assert report_file.exists()
+    report_payload = json.loads(report_file.read_text(encoding="utf-8"))
+    assert report_payload["status"] == "error"
+    assert report_payload["error"] == "restore verification failed"
+
+
 def test_db_status_includes_offsite_when_enabled(tmp_path: Path, monkeypatch) -> None:
     config = write_offsite_config(tmp_path)
     backup_dir = tmp_path / "state" / "backups" / "demo.test"
@@ -646,6 +685,40 @@ def test_db_offsite_restore_verify_uses_remote_artifact(tmp_path: Path, monkeypa
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["verification"]["offsite_object_key"] == "prod/backups/demo.test/demo_test.sql.gz.enc"
+
+
+def test_db_offsite_restore_verify_failure_writes_error_report(tmp_path: Path, monkeypatch) -> None:
+    config = write_offsite_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+
+    def fake_offsite_restore_verify(**_: object) -> dict[str, object]:
+        raise DbOffsiteError("remote restore verification failed")
+
+    monkeypatch.setattr("larops.commands.db.offsite_restore_verify", fake_offsite_restore_verify)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "db",
+            "offsite",
+            "restore-verify",
+            "demo.test",
+            "--database",
+            "appdb",
+            "--credential-file",
+            str(secret),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 1
+    report_file = tmp_path / "state" / "backups" / "demo.test" / "last_restore_verify.json"
+    assert report_file.exists()
+    report_payload = json.loads(report_file.read_text(encoding="utf-8"))
+    assert report_payload["status"] == "error"
+    assert report_payload["error"] == "remote restore verification failed"
 
 
 def test_db_backup_plan_mode_postgres(tmp_path: Path) -> None:

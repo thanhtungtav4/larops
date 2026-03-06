@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -43,6 +44,14 @@ def _temporary_dir(prefix: str) -> Iterator[Path]:
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hmac_sha256_file(path: Path, secret: str) -> str:
+    digest = hmac.new(secret.encode("utf-8"), digestmod=hashlib.sha256)
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
@@ -144,6 +153,7 @@ def encrypt_backup_artifact(*, backup_file: Path, encryption_config: BackupEncry
         "encrypted_file": encrypted_file.name,
         "size_bytes": encrypted_file.stat().st_size,
         "sha256": _sha256_file(encrypted_file),
+        "hmac_sha256": _hmac_sha256_file(encrypted_file, encryption_config.passphrase),
         "created_at": datetime.now(UTC).isoformat(),
         "cipher": encryption_config.cipher,
         "source": {
@@ -198,10 +208,18 @@ def upload_offsite_backup(
     object_key = f"{prefix}/{encrypted_file.name}"
     manifest_key = f"{prefix}/{manifest_file.name}"
     extra_args = {"StorageClass": offsite_config.storage_class}
+    uploaded_keys: list[str] = []
     try:
         client.upload_file(str(encrypted_file), offsite_config.bucket, object_key, ExtraArgs=extra_args)
+        uploaded_keys.append(object_key)
         client.upload_file(str(manifest_file), offsite_config.bucket, manifest_key, ExtraArgs=extra_args)
+        uploaded_keys.append(manifest_key)
     except Exception as exc:  # noqa: BLE001
+        for key in reversed(uploaded_keys):
+            try:
+                client.delete_object(Bucket=offsite_config.bucket, Key=key)
+            except Exception:  # noqa: BLE001
+                pass
         raise DbOffsiteError(str(exc)) from exc
 
     try:
@@ -238,40 +256,78 @@ def prune_offsite_by_age(*, domain: str, offsite_config: BackupOffsiteConfig) ->
     return deleted
 
 
-def offsite_status(*, domain: str, offsite_config: BackupOffsiteConfig, stale_hours: int) -> dict[str, Any]:
-    client = _client(offsite_config)
-    prefix = offsite_object_prefix(offsite_config=offsite_config, domain=domain)
+def _list_offsite_backup_pairs(
+    *,
+    client: Any,
+    offsite_config: BackupOffsiteConfig,
+    prefix: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     paginator = client.get_paginator("list_objects_v2")
-    backups: list[dict[str, Any]] = []
+    encrypted_objects: dict[str, dict[str, Any]] = {}
+    manifest_objects: dict[str, dict[str, Any]] = {}
     try:
         for page in paginator.paginate(Bucket=offsite_config.bucket, Prefix=f"{prefix}/"):
             for item in page.get("Contents", []):
                 key = str(item["Key"])
                 if key.endswith(".enc"):
-                    backups.append(item)
+                    encrypted_objects[key] = item
+                elif key.endswith(".enc.json"):
+                    manifest_objects[key[:-5]] = item
     except Exception as exc:  # noqa: BLE001
         raise DbOffsiteError(str(exc)) from exc
 
+    valid_backups: list[dict[str, Any]] = []
+    for object_key, encrypted_item in encrypted_objects.items():
+        manifest_item = manifest_objects.get(object_key)
+        if manifest_item is None:
+            continue
+        valid_backups.append(
+            {
+                "object_key": object_key,
+                "manifest_key": f"{object_key}.json",
+                "encrypted": encrypted_item,
+                "manifest": manifest_item,
+            }
+        )
+    incomplete_objects = [encrypted_objects[key] for key in sorted(set(encrypted_objects) - set(manifest_objects))]
+    return valid_backups, incomplete_objects
+
+
+def offsite_status(*, domain: str, offsite_config: BackupOffsiteConfig, stale_hours: int) -> dict[str, Any]:
+    client = _client(offsite_config)
+    prefix = offsite_object_prefix(offsite_config=offsite_config, domain=domain)
+    backups, incomplete_objects = _list_offsite_backup_pairs(client=client, offsite_config=offsite_config, prefix=prefix)
+
     if not backups:
+        status = "error" if incomplete_objects else "warn"
         return {
-            "status": "warn",
+            "status": status,
             "bucket": offsite_config.bucket,
             "prefix": prefix,
             "count": 0,
             "latest_object": None,
             "age_hours": None,
+            "incomplete_objects": [str(item["Key"]) for item in incomplete_objects],
         }
 
-    latest = max(backups, key=lambda item: item["LastModified"])
-    age_hours = (datetime.now(UTC) - latest["LastModified"].astimezone(UTC)).total_seconds() / 3600
+    latest = max(backups, key=lambda item: item["encrypted"]["LastModified"])
+    latest_modified = latest["encrypted"]["LastModified"].astimezone(UTC)
+    age_hours = (datetime.now(UTC) - latest_modified).total_seconds() / 3600
     status = "ok" if age_hours <= stale_hours else "warn"
+    if incomplete_objects:
+        newest_incomplete_modified = max(item["LastModified"].astimezone(UTC) for item in incomplete_objects)
+        if newest_incomplete_modified >= latest_modified:
+            status = "error"
+        elif status == "ok":
+            status = "warn"
     return {
         "status": status,
         "bucket": offsite_config.bucket,
         "prefix": prefix,
         "count": len(backups),
-        "latest_object": str(latest["Key"]),
+        "latest_object": str(latest["object_key"]),
         "age_hours": round(age_hours, 2),
+        "incomplete_objects": [str(item["Key"]) for item in incomplete_objects],
     }
 
 
@@ -281,18 +337,10 @@ def _download_artifact(*, domain: str, offsite_config: BackupOffsiteConfig, obje
     prefix = offsite_object_prefix(offsite_config=offsite_config, domain=domain)
     target_object_key = object_key
     if target_object_key is None:
-        paginator = client.get_paginator("list_objects_v2")
-        backups: list[dict[str, Any]] = []
-        try:
-            for page in paginator.paginate(Bucket=offsite_config.bucket, Prefix=f"{prefix}/"):
-                for item in page.get("Contents", []):
-                    if str(item["Key"]).endswith(".enc"):
-                        backups.append(item)
-        except Exception as exc:  # noqa: BLE001
-            raise DbOffsiteError(str(exc)) from exc
+        backups, _incomplete_objects = _list_offsite_backup_pairs(client=client, offsite_config=offsite_config, prefix=prefix)
         if not backups:
             raise DbOffsiteError(f"No offsite backups found for {domain}.")
-        target_object_key = str(max(backups, key=lambda item: item["LastModified"])["Key"])
+        target_object_key = str(max(backups, key=lambda item: item["encrypted"]["LastModified"])["object_key"])
 
     manifest_key = f"{target_object_key}.json"
     with _temporary_dir(prefix="larops-offsite-download-") as tmp_dir:
@@ -332,6 +380,11 @@ def offsite_restore_verify(
         expected_encrypted_sha = str(manifest.get("sha256", ""))
         if expected_encrypted_sha and actual_encrypted_sha != expected_encrypted_sha:
             raise DbOffsiteError("Offsite encrypted backup sha256 mismatch.")
+        expected_hmac_sha = str(manifest.get("hmac_sha256", ""))
+        if expected_hmac_sha:
+            actual_hmac_sha = _hmac_sha256_file(artifact["encrypted_file"], encryption_config.passphrase)
+            if actual_hmac_sha != expected_hmac_sha:
+                raise DbOffsiteError("Offsite encrypted backup HMAC mismatch.")
 
         decrypted_backup = artifact["encrypted_file"].with_suffix("")
         decrypt_backup_artifact(

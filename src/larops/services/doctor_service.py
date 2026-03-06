@@ -70,12 +70,24 @@ def _check_systemd_unit(unit: str) -> DoctorCheck:
         return DoctorCheck(name=f"systemd:{unit}", status="warn", detail="systemctl unavailable")
     active_raw = (active.stdout or active.stderr or "").strip()
     enabled_raw = (enabled.stdout or enabled.stderr or "").strip()
-    if active_raw == "active" and enabled_raw == "enabled":
-        status = "ok"
-    elif active_raw in {"active", "activating"} or enabled_raw == "enabled":
-        status = "warn"
+    if unit.endswith(".timer"):
+        if active_raw == "active" and enabled_raw == "enabled":
+            status = "ok"
+        elif active_raw in {"failed", "inactive", "deactivating"} or enabled_raw in {"disabled", "masked"}:
+            status = "error"
+        elif active_raw in {"active", "activating"} or enabled_raw == "enabled":
+            status = "warn"
+        else:
+            status = "warn"
     else:
-        status = "warn"
+        if active_raw == "failed" or enabled_raw == "masked":
+            status = "error"
+        elif active_raw == "active" and enabled_raw == "enabled":
+            status = "ok"
+        elif active_raw in {"active", "activating"} or enabled_raw in {"enabled", "static", "indirect", "generated"}:
+            status = "warn"
+        else:
+            status = "warn"
     return DoctorCheck(name=f"systemd:{unit}", status=status, detail=f"active={active_raw}, enabled={enabled_raw}")
 
 
@@ -106,7 +118,23 @@ def _check_restore_verify_report(state_path: Path, domain: str) -> DoctorCheck:
             status="warn",
             detail=f"missing: {report_path}",
         )
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return DoctorCheck(
+            name=f"backup-verify:{domain}",
+            status="error",
+            detail=f"invalid report: {report_path}: {exc}",
+        )
+    report_status = str(payload.get("status", "ok")).strip().lower() or "ok"
     age_hours = (datetime.now(UTC).timestamp() - report_path.stat().st_mtime) / 3600
+    if report_status != "ok":
+        error_detail = str(payload.get("error", "unknown error"))
+        return DoctorCheck(
+            name=f"backup-verify:{domain}",
+            status="error",
+            detail=f"last_result={report_status} age={int(age_hours)}h error={error_detail}",
+        )
     status = "ok" if age_hours <= 168 else "warn"
     return DoctorCheck(
         name=f"backup-verify:{domain}",
@@ -360,7 +388,10 @@ def run_app_checks(
                 DoctorCheck(
                     name=f"backup-offsite:{domain}",
                     status=str(remote["status"]),
-                    detail=f"{remote['bucket']} {remote['prefix']} latest={remote['latest_object']}",
+                    detail=(
+                        f"{remote['bucket']} {remote['prefix']} latest={remote['latest_object']} "
+                        f"incomplete={len(remote.get('incomplete_objects', []))}"
+                    ),
                 )
             )
         except DbOffsiteError as exc:

@@ -215,6 +215,11 @@ sudo larops --config /etc/larops/larops.yaml db auto-backup status example.com
 sudo larops --config /etc/larops/larops.yaml db list-backups example.com
 ```
 
+Notes:
+
+- Offsite uploads are client-side encrypted before upload and include an HMAC in the manifest for restore-time tamper detection.
+- `db offsite status` returns `error` if the latest remote upload is incomplete, for example when a `.enc` object exists without its `.enc.json` manifest pair.
+
 PostgreSQL variant:
 
 ```bash
