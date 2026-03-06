@@ -80,6 +80,9 @@ notifications:
     batch_size: 20
 doctor:
   app_command_checks: []
+  heartbeat_checks: []
+  queue_backlog_checks: []
+  failed_job_checks: []
 ```
 
 Create runtime paths:
@@ -182,7 +185,9 @@ Smoke test:
 sudo larops --config /etc/larops/larops.yaml notify telegram test --apply
 ```
 
-## 8) Security monitor profiles (scan + FIM timers)
+## 8) Security monitor profiles (scan + FIM + critical service watchdog)
+
+Prerequisite: keep `notify telegram daemon` enabled so watchdog events become Telegram alerts.
 
 Initialize baseline once (required before FIM timer):
 
@@ -211,6 +216,14 @@ sudo larops --config /etc/larops/larops.yaml monitor fim timer enable \
   --randomized-delay 120 \
   --baseline-file /var/lib/larops/state/security/fim_baseline.json \
   --apply
+
+# Service watchdog every minute
+sudo larops --config /etc/larops/larops.yaml monitor service timer enable \
+  --profile laravel-host \
+  --on-calendar "*-*-* *:*:00" \
+  --randomized-delay 10 \
+  --restart-cooldown 300 \
+  --apply
 ```
 
 Profile B - High traffic (higher frequency):
@@ -231,6 +244,14 @@ sudo larops --config /etc/larops/larops.yaml monitor fim timer enable \
   --randomized-delay 60 \
   --baseline-file /var/lib/larops/state/security/fim_baseline.json \
   --apply
+
+# Service watchdog every minute
+sudo larops --config /etc/larops/larops.yaml monitor service timer enable \
+  --profile laravel-host \
+  --on-calendar "*-*-* *:*:00" \
+  --randomized-delay 5 \
+  --restart-cooldown 180 \
+  --apply
 ```
 
 Check timer status:
@@ -238,6 +259,8 @@ Check timer status:
 ```bash
 sudo larops --config /etc/larops/larops.yaml monitor scan timer status
 sudo larops --config /etc/larops/larops.yaml monitor fim timer status
+sudo larops --config /etc/larops/larops.yaml monitor service timer status
+sudo larops --config /etc/larops/larops.yaml monitor app timer status example.com
 ```
 
 Review security report with time window:
@@ -260,13 +283,35 @@ Recommended app probes:
 
 ```yaml
 doctor:
-  app_command_checks:
-    - name: queue-failed-empty
-      command: "test \"$(php artisan queue:failed | tail -n +2 | wc -l | tr -d ' ')\" = \"0\""
+  heartbeat_checks:
+    - name: scheduler-heartbeat
+      path: storage/app/larops/scheduler-heartbeat
+      max_age_seconds: 180
+  queue_backlog_checks:
+    - name: default-queue
+      connection: redis
+      queue: default
+      max_size: 100
       timeout_seconds: 30
+  failed_job_checks:
+    - name: failed-jobs
+      max_count: 0
+      timeout_seconds: 30
+  app_command_checks:
     - name: app-about
       command: "php artisan about --only=environment"
       timeout_seconds: 30
+```
+
+Turn these probes into alerts:
+
+```bash
+sudo larops --config /etc/larops/larops.yaml monitor app run example.com --apply
+sudo larops --config /etc/larops/larops.yaml monitor app timer enable \
+  example.com \
+  --on-calendar "*-*-* *:*:00" \
+  --randomized-delay 10 \
+  --apply
 ```
 
 ## 10) Release update procedure

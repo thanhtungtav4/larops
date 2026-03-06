@@ -136,3 +136,137 @@ def test_monitor_fim_timer_status(tmp_path: Path) -> None:
     timer = lines[-1]["timer"]
     assert timer["service_unit_exists"] is True
     assert timer["timer_unit_exists"] is True
+
+
+def test_monitor_service_timer_enable_apply_writes_units(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    state_file = tmp_path / "service-watch.json"
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "monitor",
+            "service",
+            "timer",
+            "enable",
+            "--service",
+            "mariadb",
+            "--service",
+            "redis",
+            "--state-file",
+            str(state_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    service = tmp_path / "units" / "larops-monitor-service.service"
+    timer = tmp_path / "units" / "larops-monitor-service.timer"
+    assert service.exists()
+    assert timer.exists()
+    service_body = service.read_text(encoding="utf-8")
+    assert "monitor service run" in service_body
+    assert f"--state-file {state_file}" in service_body
+    assert "--service mariadb" in service_body
+    assert "--service redis" in service_body
+    assert "--restart-down-services" in service_body
+
+
+def test_monitor_service_timer_status(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    enable = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "monitor",
+            "service",
+            "timer",
+            "enable",
+            "--service",
+            "mariadb",
+            "--apply",
+        ],
+    )
+    assert enable.exit_code == 0
+    status = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "monitor", "service", "timer", "status"],
+    )
+    assert status.exit_code == 0
+    import json
+
+    lines = [json.loads(line) for line in status.stdout.strip().splitlines()]
+    timer = lines[-1]["timer"]
+    assert timer["service_unit_exists"] is True
+    assert timer["timer_unit_exists"] is True
+
+
+def test_monitor_service_timer_enable_accepts_profile(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "monitor",
+            "service",
+            "timer",
+            "enable",
+            "--profile",
+            "laravel-host",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    service = tmp_path / "units" / "larops-monitor-service.service"
+    service_body = service.read_text(encoding="utf-8")
+    assert "--profile laravel-host" in service_body
+
+
+def test_monitor_app_timer_enable_apply_writes_units(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    state_file = tmp_path / "app-monitor.json"
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "monitor",
+            "app",
+            "timer",
+            "enable",
+            "demo.test",
+            "--state-file",
+            str(state_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    service = tmp_path / "units" / "larops-monitor-app-demo-test.service"
+    timer = tmp_path / "units" / "larops-monitor-app-demo-test.timer"
+    assert service.exists()
+    assert timer.exists()
+    service_body = service.read_text(encoding="utf-8")
+    assert "monitor app run demo.test" in service_body
+    assert f"--state-file {state_file}" in service_body
+
+
+def test_monitor_app_timer_status(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    enable = runner.invoke(
+        app,
+        ["--config", str(config), "monitor", "app", "timer", "enable", "demo.test", "--apply"],
+    )
+    assert enable.exit_code == 0
+    status = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "monitor", "app", "timer", "status", "demo.test"],
+    )
+    assert status.exit_code == 0
+    import json
+
+    lines = [json.loads(line) for line in status.stdout.strip().splitlines()]
+    timer = lines[-1]["timer"]
+    assert timer["service_unit_exists"] is True
+    assert timer["timer_unit_exists"] is True

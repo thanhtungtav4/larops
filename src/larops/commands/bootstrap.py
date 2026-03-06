@@ -101,7 +101,33 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
                     "timeout_seconds": item.timeout_seconds,
                 }
                 for item in app_ctx.config.doctor.app_command_checks
-            ]
+            ],
+            "heartbeat_checks": [
+                {
+                    "name": item.name,
+                    "path": item.path,
+                    "max_age_seconds": item.max_age_seconds,
+                }
+                for item in app_ctx.config.doctor.heartbeat_checks
+            ],
+            "queue_backlog_checks": [
+                {
+                    "name": item.name,
+                    "connection": item.connection,
+                    "queue": item.queue,
+                    "max_size": item.max_size,
+                    "timeout_seconds": item.timeout_seconds,
+                }
+                for item in app_ctx.config.doctor.queue_backlog_checks
+            ],
+            "failed_job_checks": [
+                {
+                    "name": item.name,
+                    "max_count": item.max_count,
+                    "timeout_seconds": item.timeout_seconds,
+                }
+                for item in app_ctx.config.doctor.failed_job_checks
+            ],
         },
     }
     return yaml.safe_dump(payload, sort_keys=False)

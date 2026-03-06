@@ -65,3 +65,6 @@ notifications:
 
 doctor:
   app_command_checks: []
+  heartbeat_checks: []
+  queue_backlog_checks: []
+  failed_job_checks: []

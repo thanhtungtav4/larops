@@ -44,7 +44,7 @@ Main goals:
 - Database backup/restore and credentials (`db backup`, `db restore`, `db credential`).
 - Event-stream based notifications (`notify telegram run-once/watch/daemon`).
 - Security baseline controls (`security install/status/report`, `alert set/test`).
-- Monitor controls (`monitor scan run`, `monitor fim init/run`).
+- Monitor controls (`monitor scan run`, `monitor fim init/run`, `monitor service run`, `monitor app run`).
 - Health checks (`doctor run`, `doctor quick`).
 - Runtime protection with restart policy matrix and auto-heal.
 
@@ -226,6 +226,9 @@ notifications:
 
 doctor:
   app_command_checks: []
+  heartbeat_checks: []
+  queue_backlog_checks: []
+  failed_job_checks: []
 ```
 
 Environment overrides are supported for key fields (including Telegram settings).
@@ -374,17 +377,35 @@ larops doctor quick
 larops --json doctor run example.com
 ```
 
-Optional app-level probes via `doctor.app_command_checks`:
+Optional app-level probes via `doctor.app_command_checks`, `doctor.heartbeat_checks`, `doctor.queue_backlog_checks`, and `doctor.failed_job_checks`:
 
 ```yaml
 doctor:
-  app_command_checks:
-    - name: queue-failed-empty
-      command: "test \"$(php artisan queue:failed | tail -n +2 | wc -l | tr -d ' ')\" = \"0\""
+  heartbeat_checks:
+    - name: scheduler-heartbeat
+      path: storage/app/larops/scheduler-heartbeat
+      max_age_seconds: 180
+  queue_backlog_checks:
+    - name: default-queue
+      connection: redis
+      queue: default
+      max_size: 100
       timeout_seconds: 30
+  failed_job_checks:
+    - name: failed-jobs
+      max_count: 0
+      timeout_seconds: 30
+  app_command_checks:
     - name: app-about
       command: "php artisan about --only=environment"
       timeout_seconds: 30
+```
+
+Turn these probes into stateful alerts:
+
+```bash
+larops monitor app run example.com --apply
+larops monitor app timer enable example.com --on-calendar "*-*-* *:*:00" --apply
 ```
 
 ### 8. Safe delete (guarded)
@@ -527,14 +548,23 @@ Monitor:
 larops monitor scan run --apply
 larops monitor fim init --root /var/www/example.com/current --apply
 larops monitor fim run --apply
+larops monitor service run --service mariadb --service redis --apply
+larops monitor service run --profile laravel-host --apply
+larops monitor app run example.com --apply
 larops monitor scan timer enable --on-calendar "*-*-* *:*:00" --apply
 larops monitor fim timer enable --on-calendar "*-*-* *:15:00" --apply
+larops monitor service timer enable --service mariadb --service redis --on-calendar "*-*-* *:*:00" --apply
+larops monitor service timer enable --profile laravel-host --on-calendar "*-*-* *:*:00" --apply
+larops monitor app timer enable example.com --on-calendar "*-*-* *:*:00" --apply
 ```
 
 Default profile suggestions:
 
-- Small VPS: scan `*-*-* *:0/2:00`, fim `*-*-* *:0/30:00`
-- High traffic: scan `*-*-* *:*:00`, fim `*-*-* *:0/10:00`
+- Small VPS: scan `*-*-* *:0/2:00`, fim `*-*-* *:0/30:00`, service watchdog `*-*-* *:*:00`
+- High traffic: scan `*-*-* *:*:00`, fim `*-*-* *:0/10:00`, service watchdog `*-*-* *:*:00`
+
+Service watchdog emits `monitor.service.*` events into the existing JSONL event stream. If `notify telegram daemon` is enabled, LarOps will send Telegram alerts when a watched service goes down, is restarted, fails to restart, or recovers.
+Built-in profiles: `laravel-host` (`nginx`, `php-fpm`, `mariadb`, `redis`) and `laravel-postgres-host` (`nginx`, `php-fpm`, `postgresql`, `redis`).
 
 ## Telegram Notifications
 

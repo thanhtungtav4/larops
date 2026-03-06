@@ -29,6 +29,54 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     assert config.events.path == "/tmp/custom-events.jsonl"
 
 
+def test_load_config_reads_doctor_heartbeat_checks(tmp_path: Path) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text(
+        "\n".join(
+            [
+                "doctor:",
+                "  heartbeat_checks:",
+                "    - name: scheduler-heartbeat",
+                "      path: storage/app/larops/scheduler-heartbeat",
+                "      max_age_seconds: 180",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(file)
+    assert len(config.doctor.heartbeat_checks) == 1
+    assert config.doctor.heartbeat_checks[0].name == "scheduler-heartbeat"
+    assert config.doctor.heartbeat_checks[0].max_age_seconds == 180
+
+
+def test_load_config_reads_queue_and_failed_job_checks(tmp_path: Path) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text(
+        "\n".join(
+            [
+                "doctor:",
+                "  queue_backlog_checks:",
+                "    - name: default-queue",
+                "      connection: redis",
+                "      queue: default",
+                "      max_size: 25",
+                "      timeout_seconds: 20",
+                "  failed_job_checks:",
+                "    - name: failed-jobs",
+                "      max_count: 0",
+                "      timeout_seconds: 15",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(file)
+    assert len(config.doctor.queue_backlog_checks) == 1
+    assert config.doctor.queue_backlog_checks[0].connection == "redis"
+    assert config.doctor.queue_backlog_checks[0].max_size == 25
+    assert len(config.doctor.failed_job_checks) == 1
+    assert config.doctor.failed_job_checks[0].max_count == 0
+
+
 def test_load_config_env_overrides_telegram_from_secret_files(tmp_path: Path, monkeypatch) -> None:
     file = tmp_path / "larops.yaml"
     file.write_text(

@@ -32,6 +32,14 @@ def run(
                 unit_dir=Path(app_ctx.config.systemd.unit_dir),
                 systemd_manage=app_ctx.config.systemd.manage,
                 app_command_checks=list(app_ctx.config.doctor.app_command_checks),
+                heartbeat_checks=list(app_ctx.config.doctor.heartbeat_checks),
+                queue_backlog_checks=list(app_ctx.config.doctor.queue_backlog_checks),
+                failed_job_checks=list(app_ctx.config.doctor.failed_job_checks),
+                runtime_policies={
+                    "worker": app_ctx.config.runtime_policy.worker.model_dump(),
+                    "scheduler": app_ctx.config.runtime_policy.scheduler.model_dump(),
+                    "horizon": app_ctx.config.runtime_policy.horizon.model_dump(),
+                },
             )
         )
     report = summarize(checks)
@@ -60,6 +68,14 @@ def quick(
                 unit_dir=Path(app_ctx.config.systemd.unit_dir),
                 systemd_manage=app_ctx.config.systemd.manage,
                 app_command_checks=list(app_ctx.config.doctor.app_command_checks),
+                heartbeat_checks=list(app_ctx.config.doctor.heartbeat_checks),
+                queue_backlog_checks=list(app_ctx.config.doctor.queue_backlog_checks),
+                failed_job_checks=list(app_ctx.config.doctor.failed_job_checks),
+                runtime_policies={
+                    "worker": app_ctx.config.runtime_policy.worker.model_dump(),
+                    "scheduler": app_ctx.config.runtime_policy.scheduler.model_dump(),
+                    "horizon": app_ctx.config.runtime_policy.horizon.model_dump(),
+                },
             )
         )
     report = summarize(checks)

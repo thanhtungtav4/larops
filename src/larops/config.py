@@ -99,8 +99,31 @@ class DoctorAppCommandCheckConfig(BaseModel):
     timeout_seconds: int = 30
 
 
+class DoctorHeartbeatCheckConfig(BaseModel):
+    name: str
+    path: str
+    max_age_seconds: int = 180
+
+
+class DoctorQueueBacklogCheckConfig(BaseModel):
+    name: str
+    connection: str = "default"
+    queue: str = "default"
+    max_size: int = 100
+    timeout_seconds: int = 30
+
+
+class DoctorFailedJobCheckConfig(BaseModel):
+    name: str
+    max_count: int = 0
+    timeout_seconds: int = 30
+
+
 class DoctorConfig(BaseModel):
     app_command_checks: list[DoctorAppCommandCheckConfig] = Field(default_factory=list)
+    heartbeat_checks: list[DoctorHeartbeatCheckConfig] = Field(default_factory=list)
+    queue_backlog_checks: list[DoctorQueueBacklogCheckConfig] = Field(default_factory=list)
+    failed_job_checks: list[DoctorFailedJobCheckConfig] = Field(default_factory=list)
 
 
 class AppConfig(BaseModel):
