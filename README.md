@@ -43,7 +43,7 @@ Main goals:
 - SSL lifecycle (`ssl issue`, `ssl renew`, `ssl check`).
 - Database backup/restore and credentials (`db backup`, `db restore`, `db credential`).
 - Event-stream based notifications (`notify telegram run-once/watch/daemon`).
-- Security baseline controls (`security install/status/report`, `alert set/test`).
+- Security baseline controls (`security install/status/report/posture`, `alert set/test`).
 - Preventive hardening controls (`secure ssh`, `secure nginx`).
 - Monitor controls (`monitor scan run`, `monitor fim init/run`, `monitor service run`, `monitor app run`).
 - Health checks (`doctor run`, `doctor quick`).
@@ -590,16 +590,20 @@ Security baseline:
 ```bash
 larops security install --apply
 larops security status
+larops security posture
 larops security report
 larops security report --since 24h
 larops secure ssh --ssh-key-only --apply
+larops secure ssh --ssh-key-only --allow-user deploy --allow-group wheel --max-startups 10:30:60 --apply
 larops secure nginx --server-config-file /etc/nginx/sites-enabled/example.conf --apply
+larops secure nginx --profile strict --block-path /private/ --server-config-file /etc/nginx/sites-enabled/example.conf --apply
 ```
 
 Monitor:
 
 ```bash
 larops monitor scan run --apply
+larops monitor scan run --threshold-hits 8 --window-seconds 300 --apply
 larops monitor fim init --root /var/www/example.com/current --apply
 larops monitor fim run --apply
 larops monitor service run --service mariadb --service redis --apply
@@ -616,6 +620,8 @@ Default profile suggestions:
 
 - Small VPS: scan `*-*-* *:0/2:00`, fim `*-*-* *:0/30:00`, service watchdog `*-*-* *:*:00`
 - High traffic: scan `*-*-* *:*:00`, fim `*-*-* *:0/10:00`, service watchdog `*-*-* *:*:00`
+
+`monitor scan` now evaluates `threshold-hits` inside a rolling `window-seconds` window instead of only per batch read. Keep `window-seconds` aligned with your timer cadence and attack tolerance.
 
 Service watchdog emits `monitor.service.*` events into the existing JSONL event stream. If `notify telegram daemon` is enabled, LarOps will send Telegram alerts when a watched service goes down, is restarted, fails to restart, or recovers.
 Built-in profiles: `laravel-host` (`nginx`, `php-fpm`, `mariadb`, `redis`) and `laravel-postgres-host` (`nginx`, `php-fpm`, `postgresql`, `redis`).

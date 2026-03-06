@@ -61,6 +61,7 @@ def test_monitor_scan_timer_enable_apply_writes_units(tmp_path: Path) -> None:
     assert "monitor scan run" in service_body
     assert f"--state-file {state_file}" in service_body
     assert f"--nginx-log-path {nginx_log}" in service_body
+    assert "--window-seconds 300" in service_body
 
 
 def test_monitor_scan_timer_disable_remove_units(tmp_path: Path) -> None:

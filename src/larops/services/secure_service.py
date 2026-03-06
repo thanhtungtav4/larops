@@ -14,6 +14,42 @@ class SecureServiceError(RuntimeError):
 _SSH_ALLOWED_ROOT_LOGIN_MODES = {"no", "prohibit-password", "yes"}
 _SSH_KNOWN_STATES = {"active", "activating", "reloading", "inactive", "failed", "deactivating"}
 _SSH_KNOWN_ENABLED = {"enabled", "disabled", "static", "indirect", "generated", "masked"}
+_NGINX_SECURITY_PROFILES = {
+    "baseline": {
+        "login_rate": "5r/m",
+        "api_rate": "60r/m",
+        "login_burst": 10,
+        "api_burst": 120,
+        "extra_block_paths": [],
+    },
+    "strict": {
+        "login_rate": "3r/m",
+        "api_rate": "30r/m",
+        "login_burst": 5,
+        "api_burst": 60,
+        "extra_block_paths": [
+            "/adminer.php",
+            "/backup",
+            "/backup/",
+            "/backups",
+            "/backups/",
+            "/dump.sql",
+            "/dump.sql.gz",
+            "/server-info",
+            "/server-status",
+            "/storage/framework/cache/",
+            "/storage/logs/",
+            "/vendor/",
+        ],
+    },
+    "api-heavy": {
+        "login_rate": "5r/m",
+        "api_rate": "180r/m",
+        "login_burst": 10,
+        "api_burst": 300,
+        "extra_block_paths": [],
+    },
+}
 _DEFAULT_LOGIN_ROUTE_KEYS = ["=/login", "~^/password/", "~^/two-factor"]
 _DEFAULT_API_ROUTE_KEYS = ["~^/api/"]
 
@@ -48,6 +84,81 @@ def _validate_rate(value: str, *, label: str) -> str:
     return cleaned.lower()
 
 
+def _normalize_ssh_principal_list(values: list[str], *, label: str) -> list[str]:
+    normalized: list[str] = []
+    for raw in values:
+        cleaned = raw.strip()
+        if not cleaned:
+            continue
+        if any(character.isspace() for character in cleaned):
+            raise SecureServiceError(f"{label} entries cannot contain whitespace: {raw!r}")
+        normalized.append(cleaned)
+    return list(dict.fromkeys(normalized))
+
+
+def _validate_max_startups(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if re.fullmatch(r"\d+", cleaned):
+        return cleaned
+    if re.fullmatch(r"\d+:\d+:\d+", cleaned):
+        return cleaned
+    raise SecureServiceError("--max-startups must be an integer or a start:rate:full triplet like 10:30:60.")
+
+
+def _normalize_block_paths(paths: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for raw in paths:
+        cleaned = raw.strip()
+        if not cleaned:
+            continue
+        if not cleaned.startswith("/"):
+            raise SecureServiceError(f"Block paths must start with '/': {raw!r}")
+        if any(character.isspace() for character in cleaned):
+            raise SecureServiceError(f"Block paths cannot contain whitespace: {raw!r}")
+        normalized.append(cleaned)
+    return list(dict.fromkeys(normalized))
+
+
+def resolve_nginx_security_profile(
+    *,
+    profile: str,
+    login_rate: str | None,
+    api_rate: str | None,
+    login_burst: int | None,
+    api_burst: int | None,
+    extra_block_paths: list[str],
+) -> dict[str, Any]:
+    normalized_profile = profile.strip().lower()
+    if normalized_profile not in _NGINX_SECURITY_PROFILES:
+        allowed = ", ".join(sorted(_NGINX_SECURITY_PROFILES))
+        raise SecureServiceError(f"Unsupported --profile: {profile}. Allowed: {allowed}.")
+
+    defaults = _NGINX_SECURITY_PROFILES[normalized_profile]
+    resolved_login_rate = _validate_rate(login_rate or str(defaults["login_rate"]), label="--login-rate")
+    resolved_api_rate = _validate_rate(api_rate or str(defaults["api_rate"]), label="--api-rate")
+    resolved_login_burst = int(login_burst if login_burst is not None else defaults["login_burst"])
+    resolved_api_burst = int(api_burst if api_burst is not None else defaults["api_burst"])
+    if resolved_login_burst < 1:
+        raise SecureServiceError("--login-burst must be >= 1.")
+    if resolved_api_burst < 1:
+        raise SecureServiceError("--api-burst must be >= 1.")
+    resolved_block_paths = _normalize_block_paths(
+        [*defaults.get("extra_block_paths", []), *_normalize_block_paths(extra_block_paths)]
+    )
+    return {
+        "profile": normalized_profile,
+        "login_rate": resolved_login_rate,
+        "api_rate": resolved_api_rate,
+        "login_burst": resolved_login_burst,
+        "api_burst": resolved_api_burst,
+        "extra_block_paths": resolved_block_paths,
+    }
+
+
 def _snapshot_file(path: Path) -> str | None:
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -74,6 +185,9 @@ def render_sshd_drop_in(
     allow_tcp_forwarding: bool,
     allow_agent_forwarding: bool,
     x11_forwarding: bool,
+    allow_users: list[str],
+    allow_groups: list[str],
+    max_startups: str | None,
 ) -> str:
     lines = [
         "# Managed by LarOps",
@@ -87,6 +201,12 @@ def render_sshd_drop_in(
         f"X11Forwarding {'yes' if x11_forwarding else 'no'}",
         "PermitEmptyPasswords no",
     ]
+    if allow_users:
+        lines.append(f"AllowUsers {' '.join(allow_users)}")
+    if allow_groups:
+        lines.append(f"AllowGroups {' '.join(allow_groups)}")
+    if max_startups is not None:
+        lines.append(f"MaxStartups {max_startups}")
     if port is not None:
         lines.append(f"Port {port}")
     if ssh_key_only:
@@ -116,6 +236,9 @@ def apply_secure_ssh(
     allow_tcp_forwarding: bool,
     allow_agent_forwarding: bool,
     x11_forwarding: bool,
+    allow_users: list[str],
+    allow_groups: list[str],
+    max_startups: str | None,
     reload_service: str | None,
     reload_after_validate: bool,
 ) -> dict[str, Any]:
@@ -133,6 +256,9 @@ def apply_secure_ssh(
         raise SecureServiceError("--client-alive-interval must be >= 0.")
     if client_alive_count_max < 0:
         raise SecureServiceError("--client-alive-count-max must be >= 0.")
+    normalized_allow_users = _normalize_ssh_principal_list(allow_users, label="--allow-user")
+    normalized_allow_groups = _normalize_ssh_principal_list(allow_groups, label="--allow-group")
+    normalized_max_startups = _validate_max_startups(max_startups)
 
     body = render_sshd_drop_in(
         port=port,
@@ -145,6 +271,9 @@ def apply_secure_ssh(
         allow_tcp_forwarding=allow_tcp_forwarding,
         allow_agent_forwarding=allow_agent_forwarding,
         x11_forwarding=x11_forwarding,
+        allow_users=normalized_allow_users,
+        allow_groups=normalized_allow_groups,
+        max_startups=normalized_max_startups,
     )
 
     previous = _snapshot_file(sshd_drop_in_file)
@@ -166,6 +295,9 @@ def apply_secure_ssh(
         "port": port,
         "root_login_mode": normalized_root_login_mode,
         "ssh_key_only": ssh_key_only,
+        "allow_users": normalized_allow_users,
+        "allow_groups": normalized_allow_groups,
+        "max_startups": normalized_max_startups,
         "reloaded_service": reloaded_service,
     }
 
@@ -200,7 +332,14 @@ def render_nginx_http_security_config(*, login_rate: str, api_rate: str, login_z
     return "\n".join(lines)
 
 
-def render_nginx_server_security_snippet(*, login_zone_name: str, api_zone_name: str, login_burst: int, api_burst: int) -> str:
+def render_nginx_server_security_snippet(
+    *,
+    login_zone_name: str,
+    api_zone_name: str,
+    login_burst: int,
+    api_burst: int,
+    extra_block_paths: list[str],
+) -> str:
     lines = [
         "# Managed by LarOps",
         "location ~ /\\.(?!well-known) {",
@@ -220,10 +359,21 @@ def render_nginx_server_security_snippet(*, login_zone_name: str, api_zone_name:
         "location = /phpmyadmin { return 404; }",
         "location ^~ /phpmyadmin/ { return 404; }",
         "",
+    ]
+    for block_path in extra_block_paths:
+        if block_path.endswith("/"):
+            lines.append(f"location ^~ {block_path} {{ return 404; }}")
+        else:
+            lines.append(f"location = {block_path} {{ return 404; }}")
+    if extra_block_paths:
+        lines.append("")
+    lines.extend(
+        [
         f"limit_req zone={login_zone_name} burst={login_burst} nodelay;",
         f"limit_req zone={api_zone_name} burst={api_burst} nodelay;",
         "",
-    ]
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -262,34 +412,39 @@ def apply_secure_nginx(
     http_config_file: Path,
     server_snippet_file: Path,
     server_config_file: Path | None,
-    login_rate: str,
-    api_rate: str,
-    login_burst: int,
-    api_burst: int,
+    profile: str,
+    login_rate: str | None,
+    api_rate: str | None,
+    login_burst: int | None,
+    api_burst: int | None,
+    extra_block_paths: list[str],
     nginx_bin: str,
     reload_service: str | None,
     reload_after_validate: bool,
 ) -> dict[str, Any]:
-    normalized_login_rate = _validate_rate(login_rate, label="--login-rate")
-    normalized_api_rate = _validate_rate(api_rate, label="--api-rate")
-    if login_burst < 1:
-        raise SecureServiceError("--login-burst must be >= 1.")
-    if api_burst < 1:
-        raise SecureServiceError("--api-burst must be >= 1.")
+    profile_config = resolve_nginx_security_profile(
+        profile=profile,
+        login_rate=login_rate,
+        api_rate=api_rate,
+        login_burst=login_burst,
+        api_burst=api_burst,
+        extra_block_paths=extra_block_paths,
+    )
 
     login_zone_name = "larops_login"
     api_zone_name = "larops_api"
     http_body = render_nginx_http_security_config(
-        login_rate=normalized_login_rate,
-        api_rate=normalized_api_rate,
+        login_rate=str(profile_config["login_rate"]),
+        api_rate=str(profile_config["api_rate"]),
         login_zone_name=login_zone_name,
         api_zone_name=api_zone_name,
     )
     server_body = render_nginx_server_security_snippet(
         login_zone_name=login_zone_name,
         api_zone_name=api_zone_name,
-        login_burst=login_burst,
-        api_burst=api_burst,
+        login_burst=int(profile_config["login_burst"]),
+        api_burst=int(profile_config["api_burst"]),
+        extra_block_paths=list(profile_config["extra_block_paths"]),
     )
 
     snapshots = {
@@ -323,9 +478,11 @@ def apply_secure_nginx(
         "server_snippet_file": str(server_snippet_file),
         "server_config_file": str(server_config_file) if server_config_file is not None else None,
         "server_include_added": include_added,
-        "login_rate": normalized_login_rate,
-        "api_rate": normalized_api_rate,
-        "login_burst": login_burst,
-        "api_burst": api_burst,
+        "profile": str(profile_config["profile"]),
+        "login_rate": str(profile_config["login_rate"]),
+        "api_rate": str(profile_config["api_rate"]),
+        "login_burst": int(profile_config["login_burst"]),
+        "api_burst": int(profile_config["api_burst"]),
+        "extra_block_paths": list(profile_config["extra_block_paths"]),
         "reloaded_service": reloaded_service,
     }

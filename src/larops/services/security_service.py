@@ -8,6 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from larops.core.shell import run_command
+from larops.services.app_lifecycle import list_registered_apps
+from larops.services.monitor_systemd import (
+    status_monitor_app_timer,
+    status_monitor_fim_timer,
+    status_monitor_scan_timer,
+    status_monitor_service_timer,
+)
+from larops.services.notify_systemd import status_telegram_daemon
 
 
 SUSPICIOUS_PATH_PATTERNS = (
@@ -131,16 +139,33 @@ def build_security_install_plan(
 
 
 def apply_security_install_plan(plan: SecurityInstallPlan) -> dict[str, Any]:
+    previous_jail = plan.fail2ban_jail_path.read_text(encoding="utf-8") if plan.fail2ban_jail_path.exists() else None
+    previous_filter = (
+        plan.fail2ban_filter_path.read_text(encoding="utf-8") if plan.fail2ban_filter_path.exists() else None
+    )
+
     plan.fail2ban_jail_path.parent.mkdir(parents=True, exist_ok=True)
     plan.fail2ban_filter_path.parent.mkdir(parents=True, exist_ok=True)
     plan.fail2ban_jail_path.write_text(plan.fail2ban_jail_body, encoding="utf-8")
     plan.fail2ban_filter_path.write_text(plan.fail2ban_filter_body, encoding="utf-8")
 
-    for command in plan.ufw_commands:
-        run_command(command, check=True)
+    try:
+        for command in plan.ufw_commands:
+            run_command(command, check=True)
 
-    run_command(["systemctl", "enable", "--now", plan.fail2ban_service], check=True)
-    run_command(["systemctl", "restart", plan.fail2ban_service], check=True)
+        run_command(["systemctl", "enable", "--now", plan.fail2ban_service], check=True)
+        run_command(["systemctl", "restart", plan.fail2ban_service], check=True)
+    except Exception:
+        if previous_jail is None:
+            plan.fail2ban_jail_path.unlink(missing_ok=True)
+        else:
+            plan.fail2ban_jail_path.write_text(previous_jail, encoding="utf-8")
+        if previous_filter is None:
+            plan.fail2ban_filter_path.unlink(missing_ok=True)
+        else:
+            plan.fail2ban_filter_path.write_text(previous_filter, encoding="utf-8")
+        raise
+
     return {
         "ufw_commands_executed": plan.ufw_commands,
         "fail2ban_jail_path": str(plan.fail2ban_jail_path),
@@ -201,6 +226,129 @@ def determine_security_status_level(report: dict[str, Any]) -> str:
         return "error"
 
     return "ok"
+
+
+def _managed_file_status(path: Path) -> dict[str, Any]:
+    exists = path.exists()
+    managed = False
+    if exists and path.is_file():
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            body = ""
+        managed = "Managed by LarOps" in body
+    return {"path": str(path), "exists": exists, "managed": managed}
+
+
+def _nginx_include_status(server_config_file: Path | None, snippet_file: Path) -> dict[str, Any]:
+    if server_config_file is None:
+        return {"path": None, "include_present": None}
+    exists = server_config_file.exists() and server_config_file.is_file()
+    include_present = False
+    if exists:
+        try:
+            body = server_config_file.read_text(encoding="utf-8")
+        except OSError:
+            body = ""
+        include_present = f"include {snippet_file};" in body
+    return {"path": str(server_config_file), "exists": exists, "include_present": include_present}
+
+
+def _timer_configured(status: dict[str, Any], *, systemd_manage: bool) -> bool:
+    if not bool(status.get("service_unit_exists")) or not bool(status.get("timer_unit_exists")):
+        return False
+    if not systemd_manage:
+        return True
+    timer = status.get("timer", {})
+    return str(timer.get("active")) == "active" and str(timer.get("enabled")) in {"enabled", "static"}
+
+
+def _service_configured(status: dict[str, Any], *, systemd_manage: bool) -> bool:
+    if not bool(status.get("unit_exists")):
+        return False
+    if not systemd_manage:
+        return True
+    systemd = status.get("systemd", {})
+    return str(systemd.get("active")) == "active" and str(systemd.get("enabled")) in {"enabled", "static"}
+
+
+def collect_security_posture(
+    *,
+    state_path: Path,
+    unit_dir: Path,
+    systemd_manage: bool,
+    fail2ban_jail_path: Path,
+    fail2ban_filter_path: Path,
+    sshd_drop_in_file: Path,
+    nginx_http_config_file: Path,
+    nginx_server_snippet_file: Path,
+    nginx_server_config_file: Path | None,
+) -> dict[str, Any]:
+    baseline = collect_security_status(
+        fail2ban_jail_path=fail2ban_jail_path,
+        fail2ban_filter_path=fail2ban_filter_path,
+    )
+    baseline_level = determine_security_status_level(baseline)
+
+    secure_ssh = _managed_file_status(sshd_drop_in_file)
+    secure_nginx = {
+        "http_config": _managed_file_status(nginx_http_config_file),
+        "server_snippet": _managed_file_status(nginx_server_snippet_file),
+        "server_include": _nginx_include_status(nginx_server_config_file, nginx_server_snippet_file),
+    }
+    scan_timer = status_monitor_scan_timer(unit_dir=unit_dir, systemd_manage=systemd_manage)
+    fim_timer = status_monitor_fim_timer(unit_dir=unit_dir, systemd_manage=systemd_manage)
+    service_timer = status_monitor_service_timer(unit_dir=unit_dir, systemd_manage=systemd_manage)
+    notifier = status_telegram_daemon(unit_dir=unit_dir, systemd_manage=systemd_manage)
+    registered_apps = list_registered_apps(state_path)
+    app_timers = [status_monitor_app_timer(unit_dir=unit_dir, systemd_manage=systemd_manage, domain=domain) for domain in registered_apps]
+
+    checks = {
+        "baseline": baseline_level,
+        "secure_ssh": "ok" if secure_ssh["exists"] and secure_ssh["managed"] else "error",
+        "secure_nginx": "ok"
+        if (
+            secure_nginx["http_config"]["exists"]
+            and secure_nginx["http_config"]["managed"]
+            and secure_nginx["server_snippet"]["exists"]
+            and secure_nginx["server_snippet"]["managed"]
+            and (
+                secure_nginx["server_include"]["include_present"] is None
+                or secure_nginx["server_include"]["include_present"] is True
+            )
+        )
+        else "error",
+        "scan_timer": "ok" if _timer_configured(scan_timer, systemd_manage=systemd_manage) else "error",
+        "fim_timer": "ok" if _timer_configured(fim_timer, systemd_manage=systemd_manage) else "error",
+        "service_watchdog_timer": "ok" if _timer_configured(service_timer, systemd_manage=systemd_manage) else "error",
+        "telegram_notifier": "ok" if _service_configured(notifier, systemd_manage=systemd_manage) else "warn",
+        "app_timers": "ok"
+        if all(_timer_configured(item, systemd_manage=systemd_manage) for item in app_timers)
+        else ("warn" if app_timers else "ok"),
+    }
+
+    level = "ok"
+    if any(value == "error" for value in checks.values()):
+        level = "error"
+    elif any(value == "warn" for value in checks.values()):
+        level = "warn"
+
+    return {
+        "level": level,
+        "checks": checks,
+        "systemd_managed": systemd_manage,
+        "baseline": baseline,
+        "secure_ssh": secure_ssh,
+        "secure_nginx": secure_nginx,
+        "monitoring": {
+            "scan_timer": scan_timer,
+            "fim_timer": fim_timer,
+            "service_timer": service_timer,
+            "app_timers": app_timers,
+        },
+        "notifier": notifier,
+        "registered_apps": registered_apps,
+    }
 
 
 def _tail_lines(path: Path, *, max_lines: int) -> list[str]:

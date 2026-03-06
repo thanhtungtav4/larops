@@ -14,6 +14,7 @@ from larops.services.security_service import (
     apply_security_install_plan,
     build_security_install_plan,
     build_security_report,
+    collect_security_posture,
     collect_security_status,
     determine_security_status_level,
 )
@@ -164,6 +165,61 @@ def status(
     )
     status_level = determine_security_status_level(report)
     app_ctx.emit_output(status_level, "Security status.", report=report)
+
+
+@security_app.command("posture")
+def posture(
+    ctx: typer.Context,
+    fail2ban_jail_file: Path = typer.Option(
+        Path("/etc/fail2ban/jail.d/larops.conf"),
+        "--fail2ban-jail-file",
+        help="Fail2ban jail file path.",
+        dir_okay=False,
+    ),
+    fail2ban_filter_file: Path = typer.Option(
+        Path("/etc/fail2ban/filter.d/larops-nginx-scan.conf"),
+        "--fail2ban-filter-file",
+        help="Fail2ban filter file path.",
+        dir_okay=False,
+    ),
+    sshd_drop_in_file: Path = typer.Option(
+        Path("/etc/ssh/sshd_config.d/larops.conf"),
+        "--sshd-drop-in-file",
+        help="LarOps-managed sshd drop-in file.",
+        dir_okay=False,
+    ),
+    nginx_http_config_file: Path = typer.Option(
+        Path("/etc/nginx/conf.d/larops-security-http.conf"),
+        "--nginx-http-config-file",
+        help="LarOps-managed HTTP-context Nginx security config.",
+        dir_okay=False,
+    ),
+    nginx_server_snippet_file: Path = typer.Option(
+        Path("/etc/nginx/snippets/larops-security-server.conf"),
+        "--nginx-server-snippet-file",
+        help="LarOps-managed server-context Nginx security snippet.",
+        dir_okay=False,
+    ),
+    nginx_server_config_file: Path | None = typer.Option(
+        None,
+        "--nginx-server-config-file",
+        help="Optional vhost file used to verify snippet include injection.",
+        dir_okay=False,
+    ),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    report = collect_security_posture(
+        state_path=Path(app_ctx.config.state_path),
+        unit_dir=Path(app_ctx.config.systemd.unit_dir),
+        systemd_manage=app_ctx.config.systemd.manage,
+        fail2ban_jail_path=fail2ban_jail_file,
+        fail2ban_filter_path=fail2ban_filter_file,
+        sshd_drop_in_file=sshd_drop_in_file,
+        nginx_http_config_file=nginx_http_config_file,
+        nginx_server_snippet_file=nginx_server_snippet_file,
+        nginx_server_config_file=nginx_server_config_file,
+    )
+    app_ctx.emit_output(report["level"], "Security posture.", report=report)
 
 
 @security_app.command("report")

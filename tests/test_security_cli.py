@@ -119,6 +119,40 @@ def test_security_install_apply_fails_when_fail2ban_systemctl_fails(tmp_path: Pa
     assert "systemctl enable --now fail2ban" in result.stdout
 
 
+def test_security_install_apply_restores_previous_fail2ban_files_on_failure(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    jail_file = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    filter_file = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    jail_file.parent.mkdir(parents=True, exist_ok=True)
+    filter_file.parent.mkdir(parents=True, exist_ok=True)
+    jail_file.write_text("[old-jail]\nenabled=true\n", encoding="utf-8")
+    filter_file.write_text("[Definition]\nfailregex = old\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:3] == ["systemctl", "enable", "--now"] and check:
+            raise ShellCommandError("command failed (1): systemctl enable --now fail2ban")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "security",
+            "install",
+            "--fail2ban-jail-file",
+            str(jail_file),
+            "--fail2ban-filter-file",
+            str(filter_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 1
+    assert jail_file.read_text(encoding="utf-8") == "[old-jail]\nenabled=true\n"
+    assert filter_file.read_text(encoding="utf-8") == "[Definition]\nfailregex = old\n"
+
+
 def test_security_status_json(tmp_path: Path, monkeypatch) -> None:
     config = write_config(tmp_path)
 
@@ -176,6 +210,134 @@ def test_security_status_errors_when_jail_is_missing(tmp_path: Path, monkeypatch
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["status"] == "error"
+
+
+def test_security_posture_ok_when_controls_are_present(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    state_apps_dir = tmp_path / "state" / "apps"
+    units_dir = tmp_path / "units"
+    fail2ban_jail = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    fail2ban_filter = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    sshd_drop_in = tmp_path / "ssh" / "sshd_config.d" / "larops.conf"
+    nginx_http = tmp_path / "nginx" / "conf.d" / "larops-security-http.conf"
+    nginx_snippet = tmp_path / "nginx" / "snippets" / "larops-security-server.conf"
+    nginx_server = tmp_path / "nginx" / "sites-enabled" / "example.conf"
+
+    for path in (fail2ban_jail, fail2ban_filter, sshd_drop_in, nginx_http, nginx_snippet, nginx_server):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    fail2ban_jail.write_text("[sshd]\nenabled=true\n", encoding="utf-8")
+    fail2ban_filter.write_text("[Definition]\nfailregex = test\n", encoding="utf-8")
+    sshd_drop_in.write_text("# Managed by LarOps\nPermitRootLogin no\n", encoding="utf-8")
+    nginx_http.write_text("# Managed by LarOps\n", encoding="utf-8")
+    nginx_snippet.write_text("# Managed by LarOps\n", encoding="utf-8")
+    nginx_server.write_text(f"server {{\n    include {nginx_snippet};\n}}\n", encoding="utf-8")
+
+    state_apps_dir.mkdir(parents=True, exist_ok=True)
+    (state_apps_dir / "example.com.json").write_text("{}", encoding="utf-8")
+
+    for name in (
+        "larops-monitor-scan.service",
+        "larops-monitor-scan.timer",
+        "larops-monitor-fim.service",
+        "larops-monitor-fim.timer",
+        "larops-monitor-service.service",
+        "larops-monitor-service.timer",
+        "larops-notify-telegram.service",
+        "larops-monitor-app-example-com.service",
+        "larops-monitor-app-example-com.timer",
+    ):
+        (units_dir / name).parent.mkdir(parents=True, exist_ok=True)
+        (units_dir / name).write_text("[Unit]\nDescription=test\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:2] == ["ufw", "status"]:
+            return CompletedProcess(command, 0, stdout="Status: active\n", stderr="")
+        if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
+            return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "sshd"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: sshd\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "larops-nginx-scan"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: larops-nginx-scan\n", stderr="")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "security",
+            "posture",
+            "--fail2ban-jail-file",
+            str(fail2ban_jail),
+            "--fail2ban-filter-file",
+            str(fail2ban_filter),
+            "--sshd-drop-in-file",
+            str(sshd_drop_in),
+            "--nginx-http-config-file",
+            str(nginx_http),
+            "--nginx-server-snippet-file",
+            str(nginx_snippet),
+            "--nginx-server-config-file",
+            str(nginx_server),
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "ok"
+    report = payload["report"]
+    assert report["checks"]["secure_ssh"] == "ok"
+    assert report["checks"]["secure_nginx"] == "ok"
+    assert report["checks"]["scan_timer"] == "ok"
+    assert report["checks"]["telegram_notifier"] == "ok"
+    assert report["checks"]["app_timers"] == "ok"
+    assert report["registered_apps"] == ["example.com"]
+
+
+def test_security_posture_errors_when_hardening_files_are_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    fail2ban_jail = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    fail2ban_filter = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    fail2ban_jail.parent.mkdir(parents=True, exist_ok=True)
+    fail2ban_filter.parent.mkdir(parents=True, exist_ok=True)
+    fail2ban_jail.write_text("[sshd]\nenabled=true\n", encoding="utf-8")
+    fail2ban_filter.write_text("[Definition]\nfailregex = test\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:2] == ["ufw", "status"]:
+            return CompletedProcess(command, 0, stdout="Status: active\n", stderr="")
+        if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
+            return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "sshd"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: sshd\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "larops-nginx-scan"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: larops-nginx-scan\n", stderr="")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "security",
+            "posture",
+            "--fail2ban-jail-file",
+            str(fail2ban_jail),
+            "--fail2ban-filter-file",
+            str(fail2ban_filter),
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+    report = payload["report"]
+    assert report["checks"]["secure_ssh"] == "error"
+    assert report["checks"]["secure_nginx"] == "error"
+    assert report["checks"]["scan_timer"] == "error"
 
 
 def test_security_report_parses_logs(tmp_path: Path) -> None:

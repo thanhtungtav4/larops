@@ -143,12 +143,15 @@ def enable_monitor_scan_timer(
     nginx_log_path: Path,
     state_file: Path,
     threshold_hits: int,
+    window_seconds: int,
     max_lines: int,
     top: int,
 ) -> dict[str, Any]:
     _validate_timer_inputs(on_calendar=on_calendar, randomized_delay_seconds=randomized_delay_seconds)
     if threshold_hits < 1:
         raise MonitorSystemdError("--threshold-hits must be >= 1.")
+    if window_seconds < 1:
+        raise MonitorSystemdError("--window-seconds must be >= 1.")
     if max_lines < 1:
         raise MonitorSystemdError("--max-lines must be >= 1.")
     if top < 1:
@@ -169,6 +172,8 @@ def enable_monitor_scan_timer(
         str(state_file),
         "--threshold-hits",
         str(threshold_hits),
+        "--window-seconds",
+        str(window_seconds),
         "--max-lines",
         str(max_lines),
         "--top",

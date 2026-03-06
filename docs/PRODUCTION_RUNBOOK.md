@@ -240,7 +240,20 @@ sudo larops --config /etc/larops/larops.yaml db restore example.com --engine pos
 sudo larops --config /etc/larops/larops.yaml notify telegram daemon enable --apply
 sudo larops --config /etc/larops/larops.yaml notify telegram daemon status
 sudo larops --config /etc/larops/larops.yaml secure ssh --ssh-key-only --apply
+sudo larops --config /etc/larops/larops.yaml secure ssh \
+  --ssh-key-only \
+  --allow-user deploy \
+  --allow-group wheel \
+  --max-startups 10:30:60 \
+  --apply
 sudo larops --config /etc/larops/larops.yaml secure nginx --server-config-file /etc/nginx/sites-enabled/example.com.conf --apply
+sudo larops --config /etc/larops/larops.yaml secure nginx \
+  --profile strict \
+  --block-path /private/ \
+  --server-config-file /etc/nginx/sites-enabled/example.com.conf \
+  --apply
+sudo larops --config /etc/larops/larops.yaml security posture \
+  --nginx-server-config-file /etc/nginx/sites-enabled/example.com.conf
 ```
 
 Smoke test:
@@ -270,6 +283,7 @@ sudo larops --config /etc/larops/larops.yaml monitor scan timer enable \
   --on-calendar "*-*-* *:0/2:00" \
   --randomized-delay 15 \
   --threshold-hits 8 \
+  --window-seconds 300 \
   --max-lines 5000 \
   --top 10 \
   --apply
@@ -298,6 +312,7 @@ sudo larops --config /etc/larops/larops.yaml monitor scan timer enable \
   --on-calendar "*-*-* *:*:00" \
   --randomized-delay 5 \
   --threshold-hits 20 \
+  --window-seconds 120 \
   --max-lines 20000 \
   --top 20 \
   --apply
@@ -333,6 +348,8 @@ Review security report with time window:
 sudo larops --config /etc/larops/larops.yaml security report --since 1h
 sudo larops --config /etc/larops/larops.yaml security report --since 24h
 ```
+
+`monitor scan` evaluates `threshold-hits` inside `window-seconds`, not just per timer invocation. Keep the window slightly larger than the timer cadence if you want stable spike detection during timer jitter or uneven log bursts.
 
 ## 9) Health checks
 

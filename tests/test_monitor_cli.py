@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -45,12 +46,16 @@ def test_monitor_scan_apply_incremental_reads_only_new_lines(tmp_path: Path) -> 
     config = write_config(tmp_path)
     nginx_log = tmp_path / "access.log"
     state_file = tmp_path / "scan_state.json"
+    now_utc = datetime.now(UTC)
+    first_hit = (now_utc - timedelta(seconds=30)).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+    second_hit = (now_utc - timedelta(seconds=20)).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+    harmless_hit = (now_utc - timedelta(seconds=10)).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
     nginx_log.write_text(
         "\n".join(
             [
-                '1.1.1.1 - - [03/Mar/2026:10:00:00 +0700] "GET /.env HTTP/1.1" 404 100 "-" "curl/8.0"',
-                '1.1.1.1 - - [03/Mar/2026:10:00:01 +0700] "GET /wp-login.php HTTP/1.1" 404 100 "-" "curl/8.0"',
-                '9.9.9.9 - - [03/Mar/2026:10:00:02 +0700] "GET /ok HTTP/1.1" 200 10 "-" "curl/8.0"',
+                f'1.1.1.1 - - [{first_hit}] "GET /.env HTTP/1.1" 404 100 "-" "curl/8.0"',
+                f'1.1.1.1 - - [{second_hit}] "GET /wp-login.php HTTP/1.1" 404 100 "-" "curl/8.0"',
+                f'9.9.9.9 - - [{harmless_hit}] "GET /ok HTTP/1.1" 200 10 "-" "curl/8.0"',
             ]
         )
         + "\n",
@@ -71,6 +76,8 @@ def test_monitor_scan_apply_incremental_reads_only_new_lines(tmp_path: Path) -> 
             str(state_file),
             "--threshold-hits",
             "2",
+            "--window-seconds",
+            "300",
             "--apply",
         ],
     )
@@ -82,7 +89,8 @@ def test_monitor_scan_apply_incremental_reads_only_new_lines(tmp_path: Path) -> 
     assert first_result["alerts"][0]["ip"] == "1.1.1.1"
 
     with nginx_log.open("a", encoding="utf-8") as handle:
-        handle.write('2.2.2.2 - - [03/Mar/2026:10:01:00 +0700] "GET /.git/config HTTP/1.1" 404 100 "-" "curl/8.0"\n')
+        next_hit = datetime.now(UTC).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+        handle.write(f'2.2.2.2 - - [{next_hit}] "GET /.git/config HTTP/1.1" 404 100 "-" "curl/8.0"\n')
 
     second = runner.invoke(
         app,
@@ -99,6 +107,8 @@ def test_monitor_scan_apply_incremental_reads_only_new_lines(tmp_path: Path) -> 
             str(state_file),
             "--threshold-hits",
             "2",
+            "--window-seconds",
+            "300",
             "--apply",
         ],
     )
@@ -108,6 +118,72 @@ def test_monitor_scan_apply_incremental_reads_only_new_lines(tmp_path: Path) -> 
     assert second_result["lines_read"] == 1
     assert second_result["suspicious_total"] == 1
     assert second_result["alerts"] == []
+
+
+def test_monitor_scan_accumulates_hits_across_runs_inside_window(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    nginx_log = tmp_path / "access.log"
+    state_file = tmp_path / "scan_state.json"
+    first_hit = (datetime.now(UTC) - timedelta(seconds=40)).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+    nginx_log.write_text(
+        f'1.1.1.1 - - [{first_hit}] "GET /.env HTTP/1.1" 404 100 "-" "curl/8.0"\n',
+        encoding="utf-8",
+    )
+
+    first = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "monitor",
+            "scan",
+            "run",
+            "--nginx-log-path",
+            str(nginx_log),
+            "--state-file",
+            str(state_file),
+            "--threshold-hits",
+            "2",
+            "--window-seconds",
+            "300",
+            "--apply",
+        ],
+    )
+    assert first.exit_code == 0
+    first_payload = [json.loads(line) for line in first.stdout.strip().splitlines()][-1]["result"]
+    assert first_payload["alerts"] == []
+
+    with nginx_log.open("a", encoding="utf-8") as handle:
+        second_hit = (datetime.now(UTC) - timedelta(seconds=5)).astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+        handle.write(f'1.1.1.1 - - [{second_hit}] "GET /wp-login.php HTTP/1.1" 403 100 "-" "curl/8.0"\n')
+
+    second = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "monitor",
+            "scan",
+            "run",
+            "--nginx-log-path",
+            str(nginx_log),
+            "--state-file",
+            str(state_file),
+            "--threshold-hits",
+            "2",
+            "--window-seconds",
+            "300",
+            "--apply",
+        ],
+    )
+    assert second.exit_code == 0
+    second_payload = [json.loads(line) for line in second.stdout.strip().splitlines()][-1]["result"]
+    assert len(second_payload["alerts"]) == 1
+    assert second_payload["alerts"][0]["ip"] == "1.1.1.1"
+    assert second_payload["alerts"][0]["hits"] == 2
+    assert second_payload["window_seconds"] == 300
 
 
 def test_monitor_fim_init_and_run_detects_changes(tmp_path: Path) -> None:

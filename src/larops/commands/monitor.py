@@ -112,7 +112,8 @@ def scan_run(
         help="Scanner offset state file path.",
         dir_okay=False,
     ),
-    threshold_hits: int = typer.Option(8, "--threshold-hits", help="Alert threshold by IP per run."),
+    threshold_hits: int = typer.Option(8, "--threshold-hits", help="Alert threshold by IP inside the scan window."),
+    window_seconds: int = typer.Option(300, "--window-seconds", help="Rolling time window for suspicious hits."),
     max_lines: int = typer.Option(5000, "--max-lines", help="Maximum lines read per run."),
     top: int = typer.Option(10, "--top", help="Top N paths/IPs in output."),
     apply: bool = typer.Option(False, "--apply", help="Execute scan and emit events."),
@@ -125,6 +126,7 @@ def scan_run(
         nginx_log_path=str(nginx_log_path),
         state_file=str(resolved_state_file),
         threshold_hits=threshold_hits,
+        window_seconds=window_seconds,
         max_lines=max_lines,
         top=top,
         apply=apply,
@@ -140,6 +142,7 @@ def scan_run(
                 log_path=nginx_log_path,
                 state_path=resolved_state_file,
                 threshold_hits=threshold_hits,
+                window_seconds=window_seconds,
                 max_lines=max_lines,
                 top=top,
             )
@@ -165,6 +168,7 @@ def scan_run(
                 "ip": alert["ip"],
                 "hits": alert["hits"],
                 "threshold": alert["threshold"],
+                "window_seconds": alert["window_seconds"],
             },
         )
     _emit(
@@ -176,6 +180,7 @@ def scan_run(
             "log_path": str(nginx_log_path),
             "suspicious_total": result["suspicious_total"],
             "alerts": len(result["alerts"]),
+            "window_seconds": result["window_seconds"],
         },
     )
     status = "warn" if result["alerts"] else "ok"
@@ -205,7 +210,8 @@ def scan_timer_enable(
         help="Scanner offset state file path.",
         dir_okay=False,
     ),
-    threshold_hits: int = typer.Option(8, "--threshold-hits", help="Alert threshold by IP per run."),
+    threshold_hits: int = typer.Option(8, "--threshold-hits", help="Alert threshold by IP inside the scan window."),
+    window_seconds: int = typer.Option(300, "--window-seconds", help="Rolling time window for suspicious hits."),
     max_lines: int = typer.Option(5000, "--max-lines", help="Maximum lines read per run."),
     top: int = typer.Option(10, "--top", help="Top N paths/IPs in output."),
     apply: bool = typer.Option(False, "--apply", help="Apply timer setup."),
@@ -224,6 +230,7 @@ def scan_timer_enable(
         nginx_log_path=str(nginx_log_path),
         state_file=str(resolved_state),
         threshold_hits=threshold_hits,
+        window_seconds=window_seconds,
         max_lines=max_lines,
         top=top,
         apply=apply,
@@ -246,6 +253,7 @@ def scan_timer_enable(
                 nginx_log_path=nginx_log_path,
                 state_file=resolved_state,
                 threshold_hits=threshold_hits,
+                window_seconds=window_seconds,
                 max_lines=max_lines,
                 top=top,
             )
