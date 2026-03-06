@@ -19,6 +19,7 @@ from larops.services.app_lifecycle import get_app_paths
 from larops.services.db_service import manifest_path, restore_verify_report_path
 from larops.services.db_systemd import db_backup_service_name, db_backup_timer_name
 from larops.services.db_offsite_service import DbOffsiteError, offsite_status
+from larops.services.doctor_systemd import doctor_metrics_timer_name
 from larops.services.monitor_systemd import monitor_service_watch_timer_name
 from larops.services.observability_logs_service import observability_logs_service_name
 from larops.services.runtime_process import status_process
@@ -317,6 +318,9 @@ def run_host_checks(*, state_path: Path, events_path: Path, quick: bool, unit_di
             "larops-monitor-fim.timer",
             monitor_service_watch_timer_name(),
         ]
+        metrics_timer_unit = unit_dir / doctor_metrics_timer_name()
+        if metrics_timer_unit.exists():
+            units.append(doctor_metrics_timer_name())
         observability_unit = unit_dir / observability_logs_service_name()
         if observability_unit.exists():
             units.append(observability_logs_service_name())

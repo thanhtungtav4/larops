@@ -416,9 +416,15 @@ larops doctor metrics run
 larops doctor metrics run --output-file /var/lib/node_exporter/textfile_collector/larops.prom --apply
 larops doctor metrics timer enable --output-file /var/lib/node_exporter/textfile_collector/larops.prom --apply
 larops observability logs enable --sink vector --vector-address 10.0.0.10:6000 --apply
+larops observability logs enable --sink http --http-uri https://logs.example.com/ingest --http-env-file /etc/larops/vector-http.env --apply
 larops observability logs status
 larops observability logs disable --remove-files --apply
 ```
+
+Notes:
+
+- `observability logs enable --sink=http` now requires `--http-env-file` and a non-empty bearer token variable inside that file.
+- `observability logs disable --remove-files` only removes `data_dir` paths under `state_path/observability` and only when LarOps marker metadata exists.
 
 Optional app-level probes via `doctor.app_command_checks`, `doctor.heartbeat_checks`, `doctor.queue_backlog_checks`, and `doctor.failed_job_checks`:
 

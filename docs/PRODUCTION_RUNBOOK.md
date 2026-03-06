@@ -350,6 +350,11 @@ sudo larops --config /etc/larops/larops.yaml observability logs enable \
   --sink vector \
   --vector-address 10.0.0.10:6000 \
   --apply
+sudo larops --config /etc/larops/larops.yaml observability logs enable \
+  --sink http \
+  --http-uri https://logs.example.com/ingest \
+  --http-env-file /etc/larops/vector-http.env \
+  --apply
 sudo larops --config /etc/larops/larops.yaml observability logs status
 sudo larops --config /etc/larops/larops.yaml worker reconcile example.com --apply
 sudo larops --config /etc/larops/larops.yaml scheduler reconcile example.com --apply

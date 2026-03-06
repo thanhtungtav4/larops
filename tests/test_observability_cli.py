@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import yaml
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.core.shell import ShellCommandError
 
 runner = CliRunner()
 
@@ -34,10 +36,35 @@ def write_config(tmp_path: Path) -> Path:
     return config_file
 
 
+def write_managed_config(tmp_path: Path) -> Path:
+    config_file = tmp_path / "larops-managed.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 5",
+                "  health_check_path: /up",
+                "systemd:",
+                "  manage: true",
+                f"  unit_dir: {tmp_path / 'units'}",
+                "  user: www-data",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_file
+
+
 def test_observability_logs_enable_vector_unmanaged_writes_unit_and_config(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     config_file = tmp_path / "vector" / "logs.yaml"
-    data_dir = tmp_path / "vector-data"
+    data_dir = tmp_path / "state" / "observability" / "vector-data"
 
     result = runner.invoke(
         app,
@@ -81,7 +108,7 @@ def test_observability_logs_enable_vector_unmanaged_writes_unit_and_config(tmp_p
 def test_observability_logs_enable_http_renders_env_file_and_auth(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     config_file = tmp_path / "vector" / "logs-http.yaml"
-    data_dir = tmp_path / "vector-http-data"
+    data_dir = tmp_path / "state" / "observability" / "vector-http-data"
     env_file = tmp_path / "vector-http.env"
     env_file.write_text("LAROPS_VECTOR_HTTP_TOKEN=secret\n", encoding="utf-8")
 
@@ -126,7 +153,7 @@ def test_observability_logs_enable_http_renders_env_file_and_auth(tmp_path: Path
 def test_observability_logs_status_and_disable_cleanup(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     config_file = tmp_path / "vector" / "logs.yaml"
-    data_dir = tmp_path / "vector-data"
+    data_dir = tmp_path / "state" / "observability" / "vector-data"
 
     enable = runner.invoke(
         app,
@@ -195,3 +222,101 @@ def test_observability_logs_status_and_disable_cleanup(tmp_path: Path) -> None:
     assert not (tmp_path / "units" / "larops-observability-logs.service").exists()
     assert not config_file.exists()
     assert not data_dir.exists()
+
+
+def test_observability_logs_enable_http_requires_token_env_file(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "observability",
+            "logs",
+            "enable",
+            "--sink",
+            "http",
+            "--http-uri",
+            "https://logs.example.com/ingest",
+            "--vector-bin",
+            "/bin/echo",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--http-env-file is required when --sink=http." in result.stdout
+
+
+def test_observability_logs_disable_rejects_unmanaged_data_dir(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    config_file = tmp_path / "vector" / "logs.yaml"
+    unsafe_data_dir = tmp_path / "unsafe-vector-data"
+    unsafe_data_dir.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "observability",
+            "logs",
+            "disable",
+            "--config-file",
+            str(config_file),
+            "--data-dir",
+            str(unsafe_data_dir),
+            "--remove-files",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "data_dir must stay within" in result.stdout
+    assert unsafe_data_dir.exists()
+
+
+def test_observability_logs_disable_fails_when_systemctl_stop_fails(tmp_path: Path, monkeypatch) -> None:
+    config = write_managed_config(tmp_path)
+    config_file = tmp_path / "vector" / "logs.yaml"
+    data_dir = tmp_path / "state" / "observability" / "vector-data"
+    unit_path = tmp_path / "units" / "larops-observability-logs.service"
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_path.write_text("[Unit]\nDescription=test\n", encoding="utf-8")
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("data_dir: test\n", encoding="utf-8")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / ".larops-managed").write_text("larops-observability-logs\n", encoding="utf-8")
+
+    def fake_run_command(
+        command: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: int | None = None,
+    ) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "disable"]:
+            if check:
+                raise ShellCommandError("systemctl disable failed")
+            return CompletedProcess(command, 1, stdout="", stderr="failed")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.observability_logs_service.run_command", fake_run_command)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "observability",
+            "logs",
+            "disable",
+            "--config-file",
+            str(config_file),
+            "--data-dir",
+            str(data_dir),
+            "--remove-files",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    assert unit_path.exists()
+    assert config_file.exists()
+    assert data_dir.exists()

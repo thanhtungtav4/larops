@@ -35,6 +35,10 @@ def _resolve_logs_data_dir(app_ctx: AppContext, data_dir: Path | None) -> Path:
     return data_dir or (Path(app_ctx.config.state_path) / "observability" / "vector")
 
 
+def _observability_root(app_ctx: AppContext) -> Path:
+    return Path(app_ctx.config.state_path) / "observability"
+
+
 def _resolve_laravel_logs(app_ctx: AppContext, laravel_logs: list[str] | None) -> list[str]:
     if laravel_logs:
         return laravel_logs
@@ -206,6 +210,7 @@ def logs_disable(
                 remove_files=remove_files,
                 config_file=resolved_config_file,
                 data_dir=resolved_data_dir,
+                allowed_data_root=_observability_root(app_ctx),
             )
     except (CommandLockError, ObservabilityLogsError) as exc:
         app_ctx.emit_output("error", str(exc))

@@ -298,6 +298,36 @@ def test_run_host_checks_includes_observability_logs_service_when_unit_exists(mo
     assert "systemd:larops-observability-logs.service" in names
 
 
+def test_run_host_checks_includes_doctor_metrics_timer_when_unit_exists(monkeypatch, tmp_path: Path) -> None:
+    unit_path = tmp_path / "units" / "larops-doctor-metrics.timer"
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_path.write_text("[Unit]\nDescription=test\n", encoding="utf-8")
+
+    def fake_run_command(
+        command: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: int | None = None,
+    ) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"]:
+            return CompletedProcess(command, 0, stdout="active\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.doctor_service.run_command", fake_run_command)
+
+    checks = run_host_checks(
+        state_path=tmp_path / "state",
+        events_path=tmp_path / "events.jsonl",
+        quick=False,
+        unit_dir=tmp_path / "units",
+        systemd_manage=True,
+    )
+    names = {check.name for check in checks}
+    assert "systemd:larops-doctor-metrics.timer" in names
+
+
 def test_run_host_checks_marks_failed_timers_as_error(monkeypatch, tmp_path: Path) -> None:
     def fake_run_command(
         command: list[str],

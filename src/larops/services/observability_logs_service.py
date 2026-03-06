@@ -18,6 +18,10 @@ def observability_logs_service_name() -> str:
     return "larops-observability-logs.service"
 
 
+def _managed_marker_path(data_dir: Path) -> Path:
+    return data_dir / ".larops-managed"
+
+
 def _unit_path(unit_dir: Path) -> Path:
     return unit_dir / observability_logs_service_name()
 
@@ -55,8 +59,27 @@ def _validate_sink_config(
     if normalized == "http":
         if not (http_uri or "").strip():
             raise ObservabilityLogsError("--http-uri is required when --sink=http.")
-        if http_env_file is not None and not http_bearer_token_env_var.strip():
-            raise ObservabilityLogsError("--http-bearer-token-env-var cannot be empty when --http-env-file is used.")
+        if http_env_file is None:
+            raise ObservabilityLogsError("--http-env-file is required when --sink=http.")
+        if not http_bearer_token_env_var.strip():
+            raise ObservabilityLogsError("--http-bearer-token-env-var cannot be empty when --sink=http.")
+        if not http_env_file.exists() or not http_env_file.is_file():
+            raise ObservabilityLogsError(f"HTTP env file does not exist: {http_env_file}")
+        env_lines = http_env_file.read_text(encoding="utf-8").splitlines()
+        prefix = f"{http_bearer_token_env_var.strip()}="
+        if not any(line.strip().startswith(prefix) and line.strip()[len(prefix) :].strip() for line in env_lines):
+            raise ObservabilityLogsError(
+                f"HTTP env file does not define a non-empty {http_bearer_token_env_var.strip()} variable: {http_env_file}"
+            )
+
+
+def _ensure_within_root(*, path: Path, allowed_root: Path, label: str) -> None:
+    resolved_root = allowed_root.resolve()
+    resolved_path = path.resolve()
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ObservabilityLogsError(f"{label} must stay within {resolved_root}: {resolved_path}") from exc
 
 
 def _normalize_patterns(patterns: list[str]) -> list[str]:
@@ -272,6 +295,7 @@ def enable_logs_shipping(
     )
     config_file.parent.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
+    _managed_marker_path(data_dir).write_text("larops-observability-logs\n", encoding="utf-8")
     config_file.write_text(config_body, encoding="utf-8")
 
     unit_path = _unit_path(unit_dir)
@@ -312,19 +336,27 @@ def disable_logs_shipping(
     remove_files: bool,
     config_file: Path,
     data_dir: Path,
+    allowed_data_root: Path,
 ) -> dict[str, Any]:
     service = observability_logs_service_name()
     unit_path = _unit_path(unit_dir)
     removed_paths: list[str] = []
-    if systemd_manage:
-        run_command(["systemctl", "disable", "--now", service], check=False)
+    if systemd_manage and unit_path.exists():
+        try:
+            _run_systemctl(["disable", "--now", service], check=True)
+        except (ShellCommandError, FileNotFoundError) as exc:
+            raise ObservabilityLogsError(str(exc)) from exc
 
     if remove_files:
+        _ensure_within_root(path=data_dir, allowed_root=allowed_data_root, label="data_dir")
         for path in (unit_path, config_file):
             if path.exists():
                 path.unlink()
                 removed_paths.append(str(path))
         if data_dir.exists():
+            marker_path = _managed_marker_path(data_dir)
+            if not marker_path.exists():
+                raise ObservabilityLogsError(f"Refusing to remove unmanaged data_dir without marker: {data_dir}")
             shutil.rmtree(data_dir)
             removed_paths.append(str(data_dir))
         if systemd_manage and removed_paths:
