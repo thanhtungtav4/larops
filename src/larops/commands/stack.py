@@ -15,6 +15,7 @@ def install(
     ctx: typer.Context,
     web: bool = typer.Option(False, "--web", help="Install web runtime components."),
     data: bool = typer.Option(False, "--data", help="Install data components."),
+    postgres: bool = typer.Option(False, "--postgres", help="Install PostgreSQL components."),
     ops: bool = typer.Option(False, "--ops", help="Install operations components."),
     apply: bool = typer.Option(
         False,
@@ -24,9 +25,9 @@ def install(
 ) -> None:
     app_ctx: AppContext = ctx.obj
     host = socket.gethostname()
-    requested = resolve_groups(web, data, ops)
+    requested = resolve_groups(web, data, postgres, ops)
     if not requested:
-        app_ctx.emit_output("error", "No stack group selected. Use --web, --data, or --ops.")
+        app_ctx.emit_output("error", "No stack group selected. Use --web, --data, --postgres, or --ops.")
         raise typer.Exit(code=2)
 
     plan = build_stack_plan(requested)

@@ -6,6 +6,23 @@ deploy:
   source_base_path: /var/www/source
   keep_releases: 5
   health_check_path: /up
+  health_check_enabled: false
+  health_check_scheme: http
+  health_check_host: 127.0.0.1
+  health_check_timeout_seconds: 5
+  health_check_retries: 3
+  health_check_retry_delay_seconds: 1
+  health_check_expected_status: 200
+  health_check_use_domain_host_header: true
+  rollback_on_health_check_failure: false
+  runtime_refresh_strategy: none
+  shared_dirs:
+    - storage
+    - bootstrap/cache
+  shared_files:
+    - .env
+  pre_activate_commands: []
+  post_activate_commands: []
 
 systemd:
   manage: true

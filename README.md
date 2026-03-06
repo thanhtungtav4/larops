@@ -150,6 +150,23 @@ deploy:
   source_base_path: /var/www/source
   keep_releases: 5
   health_check_path: /up
+  health_check_enabled: false
+  health_check_scheme: http
+  health_check_host: 127.0.0.1
+  health_check_timeout_seconds: 5
+  health_check_retries: 3
+  health_check_retry_delay_seconds: 1
+  health_check_expected_status: 200
+  health_check_use_domain_host_header: true
+  rollback_on_health_check_failure: false
+  runtime_refresh_strategy: none
+  shared_dirs:
+    - storage
+    - bootstrap/cache
+  shared_files:
+    - .env
+  pre_activate_commands: []
+  post_activate_commands: []
 
 systemd:
   manage: true
@@ -307,7 +324,11 @@ larops ssl auto-renew disable --remove-units --apply
 ```bash
 export LAROPS_DB_PASSWORD="strong-password"
 larops db credential set example.com --user appuser --apply
-larops db backup example.com --database appdb --apply
+larops db backup example.com --database appdb --retain-count 10 --apply
+larops db status example.com
+larops db verify --backup-file /path/backup.sql.gz
+larops db auto-backup enable example.com --database appdb --apply
+larops db auto-backup status example.com
 larops db list-backups example.com
 larops db restore example.com --backup-file /path/backup.sql.gz --database appdb --apply
 ```
@@ -317,7 +338,7 @@ PostgreSQL example:
 ```bash
 export LAROPS_DB_PASSWORD="strong-password"
 larops db credential set example.com --engine postgres --user appuser --apply
-larops db backup example.com --engine postgres --database appdb --apply
+larops db backup example.com --engine postgres --database appdb --retain-count 10 --apply
 larops db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
 
@@ -332,6 +353,7 @@ larops --json doctor run example.com
 
 ```bash
 larops site delete example.com --purge --confirm example.com --apply
+larops site restore example.com --checkpoint-file /path/checkpoint.tar.gz --apply
 ```
 
 Or non-interactive guard bypass:
@@ -377,12 +399,12 @@ Each process (`worker`, `scheduler`, `horizon`) supports:
 - `max_restarts`: max restart attempts inside rolling window.
 - `window_seconds`: rolling window length.
 - `cooldown_seconds`: block further restart attempts after threshold.
-- `auto_heal`: during status checks, attempt self-heal restart if process is down.
+- `auto_heal`: status surface reports whether runtime is healthy enough for reconcile policy.
 
 Behavior:
 
 - Manual restart respects rate limit and cooldown.
-- Auto-heal also respects policy limits.
+- Manual reconcile uses the same rate limits before attempting restart.
 - Policy is written into runtime spec for traceability.
 
 ## Command Cheat Sheet
@@ -408,6 +430,7 @@ Site lifecycle:
 ```bash
 larops site create example.com --apply
 larops site runtime enable example.com -w -s -a
+larops site runtime reconcile example.com -w -a
 larops site permissions example.com --apply
 larops site delete example.com --purge --confirm example.com --apply
 ```
@@ -434,6 +457,10 @@ Database:
 larops db credential show example.com
 larops db backup example.com --database appdb --apply
 larops db backup example.com --engine postgres --database appdb --apply
+larops db status example.com
+larops db verify --backup-file /path/backup.sql.gz
+larops db auto-backup enable example.com --database appdb --apply
+larops db auto-backup status example.com
 larops db list-backups example.com
 ```
 

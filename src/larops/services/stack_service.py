@@ -17,7 +17,8 @@ PACKAGE_GROUPS = {
         "php8.3-zip",
     ],
     "data": ["mariadb-server", "redis-server"],
-    "ops": ["supervisor", "fail2ban", "ufw"],
+    "postgres": ["postgresql"],
+    "ops": ["fail2ban", "ufw"],
 }
 
 
@@ -27,8 +28,8 @@ class StackPlan:
     commands: list[list[str]]
 
 
-def resolve_groups(web: bool, data: bool, ops: bool) -> list[str]:
-    return [name for name, enabled in {"web": web, "data": data, "ops": ops}.items() if enabled]
+def resolve_groups(web: bool, data: bool, postgres: bool, ops: bool) -> list[str]:
+    return [name for name, enabled in {"web": web, "data": data, "postgres": postgres, "ops": ops}.items() if enabled]
 
 
 def build_install_commands(groups: Iterable[str]) -> list[list[str]]:
@@ -46,4 +47,3 @@ def build_stack_plan(groups: list[str]) -> StackPlan:
 def apply_stack_plan(plan: StackPlan) -> None:
     for command in plan.commands:
         run_command(command, check=True)
-

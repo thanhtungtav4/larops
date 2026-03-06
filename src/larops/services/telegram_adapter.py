@@ -34,7 +34,15 @@ class TelegramAdapterConfig:
 
 
 def _default_state() -> dict:
-    return {"offset": 0, "sent_ids": []}
+    return {
+        "offset": 0,
+        "sent_ids": [],
+        "inode": None,
+        "device": None,
+        "size": 0,
+        "mtime_ns": None,
+        "updated_at": None,
+    }
 
 
 def load_state(path: Path) -> dict:
@@ -130,6 +138,33 @@ def dispatch_once(
     offset = int(state.get("offset", 0))
     sent_ids = list(state.get("sent_ids", []))
     sent_set = set(sent_ids)
+    current_inode = None
+    current_device = None
+    current_size = 0
+    current_mtime_ns = None
+    if config.events_path.exists():
+        stat = config.events_path.stat()
+        current_inode = f"{stat.st_dev}:{stat.st_ino}"
+        current_device = int(stat.st_dev)
+        current_size = int(stat.st_size)
+        current_mtime_ns = int(stat.st_mtime_ns)
+    previous_inode = state.get("inode")
+    previous_device = state.get("device")
+    previous_size = int(state.get("size", 0))
+    previous_mtime_ns = state.get("mtime_ns")
+    if current_inode is not None and (
+        previous_inode != current_inode
+        or previous_device != current_device
+        or offset > current_size
+        or offset < 0
+        or (
+            previous_mtime_ns is not None
+            and current_mtime_ns is not None
+            and current_mtime_ns != previous_mtime_ns
+            and current_size <= previous_size
+        )
+    ):
+        offset = 0
 
     events, end_offset = _read_events(config.events_path, offset, max(1, config.batch_size))
     considered = 0
@@ -153,7 +188,12 @@ def dispatch_once(
         delivered += 1
 
     state["offset"] = end_offset
+    state["inode"] = current_inode
+    state["device"] = current_device
+    state["size"] = current_size
+    state["mtime_ns"] = current_mtime_ns
     state["sent_ids"] = sent_ids[-1000:]
+    state["updated_at"] = int(time.time())
     save_state(config.state_file, state)
     return {
         "considered": considered,

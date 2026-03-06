@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -7,7 +9,7 @@ import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
-from larops.core.shell import run_command
+from larops.core.shell import ShellCommandError, run_command
 
 
 class DbServiceError(RuntimeError):
@@ -48,6 +50,62 @@ def list_backups(backup_dir: Path) -> list[str]:
     if not backup_dir.exists():
         return []
     return sorted([item.name for item in backup_dir.glob("*.sql.gz") if item.is_file()])
+
+
+def manifest_path(backup_file: Path) -> Path:
+    return backup_file.with_name(f"{backup_file.name}.json")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_backup_manifest(*, backup_file: Path, domain: str, engine: str, database: str) -> Path:
+    payload = {
+        "domain": domain,
+        "engine": normalize_db_engine(engine),
+        "database": database,
+        "backup_file": str(backup_file),
+        "size_bytes": backup_file.stat().st_size,
+        "sha256": _sha256_file(backup_file),
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    path = manifest_path(backup_file)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def read_backup_manifest(backup_file: Path) -> dict | None:
+    path = manifest_path(backup_file)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def latest_backup(backup_dir: Path) -> Path | None:
+    backups = [backup_dir / name for name in list_backups(backup_dir)]
+    if not backups:
+        return None
+    return backups[-1]
+
+
+def prune_backups(*, backup_dir: Path, retain_count: int) -> list[str]:
+    if retain_count < 1:
+        return []
+    backups = [backup_dir / name for name in list_backups(backup_dir)]
+    if len(backups) <= retain_count:
+        return []
+    deleted: list[str] = []
+    for backup in backups[:-retain_count]:
+        manifest = manifest_path(backup)
+        backup.unlink(missing_ok=True)
+        manifest.unlink(missing_ok=True)
+        deleted.append(backup.name)
+    return deleted
 
 
 def write_mysql_credentials(
@@ -236,3 +294,94 @@ def build_restore_command(
 def run_restore(command: list[str]) -> str:
     completed = run_command(command, check=True)
     return (completed.stdout or "").strip()
+
+
+def backup_status(*, backup_dir: Path, stale_hours: int) -> dict:
+    latest = latest_backup(backup_dir)
+    backups = list_backups(backup_dir)
+    if latest is None:
+        return {
+            "status": "warn",
+            "backup_dir": str(backup_dir),
+            "count": 0,
+            "latest_backup": None,
+            "latest_manifest": None,
+            "age_hours": None,
+            "manifest_present": False,
+        }
+
+    age_hours = (datetime.now(UTC).timestamp() - latest.stat().st_mtime) / 3600
+    manifest = read_backup_manifest(latest)
+    status = "ok"
+    if age_hours > max(1, stale_hours):
+        status = "warn"
+    if manifest is None:
+        status = "warn"
+    return {
+        "status": status,
+        "backup_dir": str(backup_dir),
+        "count": len(backups),
+        "latest_backup": str(latest),
+        "latest_manifest": str(manifest_path(latest)) if manifest is not None else None,
+        "age_hours": round(age_hours, 2),
+        "manifest_present": manifest is not None,
+        "latest_name": latest.name,
+    }
+
+
+def verify_backup(
+    *,
+    backup_file: Path,
+    manifest_file: Path | None = None,
+    check_gzip: bool = True,
+    require_manifest: bool = False,
+) -> dict:
+    if not backup_file.exists():
+        raise DbServiceError(f"Backup file not found: {backup_file}")
+
+    resolved_manifest = manifest_file or manifest_path(backup_file)
+    manifest_payload: dict | None = None
+    if resolved_manifest.exists():
+        try:
+            manifest_payload = json.loads(resolved_manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise DbServiceError(f"Invalid backup manifest: {resolved_manifest}") from exc
+    elif require_manifest:
+        raise DbServiceError(f"Backup manifest not found: {resolved_manifest}")
+
+    actual_size = int(backup_file.stat().st_size)
+    actual_sha256 = _sha256_file(backup_file)
+    gzip_status = "skipped"
+    if check_gzip:
+        try:
+            run_command(["gzip", "-t", str(backup_file)], check=True)
+        except ShellCommandError as exc:
+            raise DbServiceError(str(exc)) from exc
+        gzip_status = "ok"
+
+    sha256_match = None
+    size_match = None
+    if manifest_payload is not None:
+        sha256_match = str(manifest_payload.get("sha256", "")) == actual_sha256
+        try:
+            size_match = int(manifest_payload.get("size_bytes", -1)) == actual_size
+        except (TypeError, ValueError):
+            size_match = False
+
+    status = "ok"
+    if manifest_payload is None:
+        status = "warn"
+    if sha256_match is False or size_match is False:
+        status = "error"
+
+    return {
+        "status": status,
+        "backup_file": str(backup_file),
+        "manifest_file": str(resolved_manifest),
+        "manifest_present": manifest_payload is not None,
+        "size_bytes": actual_size,
+        "sha256": actual_sha256,
+        "sha256_match": sha256_match,
+        "size_match": size_match,
+        "gzip_check": gzip_status,
+    }

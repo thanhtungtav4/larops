@@ -25,6 +25,23 @@ deploy:
   source_base_path: /var/www/source
   keep_releases: 5
   health_check_path: /up
+  health_check_enabled: false
+  health_check_scheme: http
+  health_check_host: 127.0.0.1
+  health_check_timeout_seconds: 5
+  health_check_retries: 3
+  health_check_retry_delay_seconds: 1
+  health_check_expected_status: 200
+  health_check_use_domain_host_header: true
+  rollback_on_health_check_failure: false
+  runtime_refresh_strategy: none
+  shared_dirs:
+    - storage
+    - bootstrap/cache
+  shared_files:
+    - .env
+  pre_activate_commands: []
+  post_activate_commands: []
 systemd:
   manage: true
   unit_dir: /etc/systemd/system
@@ -108,7 +125,11 @@ export LAROPS_DB_PASSWORD='strong-db-password'
 sudo --preserve-env=LAROPS_DB_PASSWORD larops --config /etc/larops/larops.yaml \
   db credential set example.com --user appuser --host 127.0.0.1 --port 3306 --apply
 
-sudo larops --config /etc/larops/larops.yaml db backup example.com --database appdb --apply
+sudo larops --config /etc/larops/larops.yaml db backup example.com --database appdb --retain-count 10 --apply
+sudo larops --config /etc/larops/larops.yaml db status example.com
+sudo larops --config /etc/larops/larops.yaml db verify --backup-file /path/backup.sql.gz
+sudo larops --config /etc/larops/larops.yaml db auto-backup enable example.com --database appdb --apply
+sudo larops --config /etc/larops/larops.yaml db auto-backup status example.com
 sudo larops --config /etc/larops/larops.yaml db list-backups example.com
 ```
 
@@ -119,7 +140,8 @@ export LAROPS_DB_PASSWORD='strong-db-password'
 sudo --preserve-env=LAROPS_DB_PASSWORD larops --config /etc/larops/larops.yaml \
   db credential set example.com --engine postgres --user appuser --host 127.0.0.1 --port 5432 --apply
 
-sudo larops --config /etc/larops/larops.yaml db backup example.com --engine postgres --database appdb --apply
+sudo larops --config /etc/larops/larops.yaml db backup example.com --engine postgres --database appdb --retain-count 10 --apply
+sudo larops --config /etc/larops/larops.yaml db auto-backup enable example.com --engine postgres --database appdb --apply
 sudo larops --config /etc/larops/larops.yaml db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
 
@@ -206,6 +228,8 @@ sudo larops --config /etc/larops/larops.yaml security report --since 24h
 ```bash
 sudo larops --config /etc/larops/larops.yaml doctor quick host
 sudo larops --config /etc/larops/larops.yaml doctor run example.com
+sudo larops --config /etc/larops/larops.yaml worker reconcile example.com --apply
+sudo larops --config /etc/larops/larops.yaml scheduler reconcile example.com --apply
 ```
 
 ## 10) Release update procedure

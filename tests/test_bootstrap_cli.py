@@ -69,3 +69,56 @@ def test_bootstrap_apply_with_domain_and_skip_stack(tmp_path: Path) -> None:
     payload = json.loads(info.stdout.strip())
     assert payload["releases_count"] == 1
 
+
+def test_bootstrap_write_config_does_not_materialize_telegram_secrets(tmp_path: Path) -> None:
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    bot_token_file = secret_dir / "bot-token"
+    chat_id_file = secret_dir / "chat-id"
+    bot_token_file.write_text("real-bot-token", encoding="utf-8")
+    chat_id_file.write_text("123456", encoding="utf-8")
+
+    config_file = tmp_path / "larops.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 3",
+                "  health_check_path: /up",
+                "notifications:",
+                "  telegram:",
+                "    enabled: true",
+                f"    bot_token_file: {bot_token_file}",
+                f"    chat_id_file: {chat_id_file}",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    generated_config = tmp_path / "generated.yaml"
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_file),
+            "bootstrap",
+            "init",
+            "--skip-stack",
+            "--write-config",
+            "--config-path",
+            str(generated_config),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    rendered = generated_config.read_text(encoding="utf-8")
+    assert "real-bot-token" not in rendered
+    assert "123456" not in rendered
+    assert f"bot_token_file: {bot_token_file}" in rendered
+    assert f"chat_id_file: {chat_id_file}" in rendered

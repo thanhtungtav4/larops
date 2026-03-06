@@ -13,12 +13,18 @@ from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_lifecycle import (
     AppLifecycleError,
-    deploy_release,
+    activate_release,
     get_app_paths,
     initialize_app,
     load_metadata,
     prune_releases,
     save_metadata,
+)
+from larops.services.release_service import (
+    ReleaseServiceError,
+    prepare_release_candidate,
+    run_http_health_check,
+    run_release_commands,
 )
 from larops.services.stack_service import apply_stack_plan, build_stack_plan, resolve_groups
 
@@ -34,6 +40,20 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
             "source_base_path": app_ctx.config.deploy.source_base_path,
             "keep_releases": app_ctx.config.deploy.keep_releases,
             "health_check_path": app_ctx.config.deploy.health_check_path,
+            "health_check_enabled": app_ctx.config.deploy.health_check_enabled,
+            "health_check_scheme": app_ctx.config.deploy.health_check_scheme,
+            "health_check_host": app_ctx.config.deploy.health_check_host,
+            "health_check_timeout_seconds": app_ctx.config.deploy.health_check_timeout_seconds,
+            "health_check_retries": app_ctx.config.deploy.health_check_retries,
+            "health_check_retry_delay_seconds": app_ctx.config.deploy.health_check_retry_delay_seconds,
+            "health_check_expected_status": app_ctx.config.deploy.health_check_expected_status,
+            "health_check_use_domain_host_header": app_ctx.config.deploy.health_check_use_domain_host_header,
+            "rollback_on_health_check_failure": app_ctx.config.deploy.rollback_on_health_check_failure,
+            "runtime_refresh_strategy": app_ctx.config.deploy.runtime_refresh_strategy,
+            "shared_dirs": list(app_ctx.config.deploy.shared_dirs),
+            "shared_files": list(app_ctx.config.deploy.shared_files),
+            "pre_activate_commands": list(app_ctx.config.deploy.pre_activate_commands),
+            "post_activate_commands": list(app_ctx.config.deploy.post_activate_commands),
         },
         "systemd": {
             "manage": app_ctx.config.systemd.manage,
@@ -47,9 +67,9 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
         "notifications": {
             "telegram": {
                 "enabled": app_ctx.config.notifications.telegram.enabled,
-                "bot_token": app_ctx.config.notifications.telegram.bot_token,
+                "bot_token": "",
                 "bot_token_file": app_ctx.config.notifications.telegram.bot_token_file,
-                "chat_id": app_ctx.config.notifications.telegram.chat_id,
+                "chat_id": "",
                 "chat_id_file": app_ctx.config.notifications.telegram.chat_id_file,
                 "min_severity": app_ctx.config.notifications.telegram.min_severity,
                 "batch_size": app_ctx.config.notifications.telegram.batch_size,
@@ -64,6 +84,7 @@ def init(
     ctx: typer.Context,
     web: bool = typer.Option(True, "--web/--no-web", help="Install web stack group."),
     data: bool = typer.Option(True, "--data/--no-data", help="Install data stack group."),
+    postgres: bool = typer.Option(False, "--postgres/--no-postgres", help="Install PostgreSQL stack group."),
     ops: bool = typer.Option(True, "--ops/--no-ops", help="Install ops stack group."),
     skip_stack: bool = typer.Option(False, "--skip-stack", help="Skip stack installation stage."),
     write_config: bool = typer.Option(
@@ -85,7 +106,7 @@ def init(
 ) -> None:
     app_ctx: AppContext = ctx.obj
     host = socket.gethostname()
-    requested_groups = [] if skip_stack else resolve_groups(web, data, ops)
+    requested_groups = [] if skip_stack else resolve_groups(web, data, postgres, ops)
     stack_plan = build_stack_plan(requested_groups) if requested_groups else None
     source_path = source.resolve()
 
@@ -160,7 +181,37 @@ def init(
                 else:
                     _ = load_metadata(paths.metadata)
 
-                release_id = deploy_release(paths, source_path, ref)
+                release_id, release_dir = prepare_release_candidate(
+                    paths=paths,
+                    source_path=source_path,
+                    ref=ref,
+                    shared_dirs=app_ctx.config.deploy.shared_dirs,
+                    shared_files=app_ctx.config.deploy.shared_files,
+                )
+                pre_activate_reports = run_release_commands(
+                    workdir=release_dir,
+                    commands=list(app_ctx.config.deploy.pre_activate_commands),
+                )
+                activate_release(paths, release_dir)
+                current_path = paths.current.resolve(strict=True)
+                post_activate_reports = run_release_commands(
+                    workdir=current_path,
+                    commands=list(app_ctx.config.deploy.post_activate_commands),
+                )
+                health_check = run_http_health_check(
+                    domain=domain,
+                    path=app_ctx.config.deploy.health_check_path,
+                    enabled=app_ctx.config.deploy.health_check_enabled,
+                    scheme=app_ctx.config.deploy.health_check_scheme,
+                    host=app_ctx.config.deploy.health_check_host,
+                    timeout_seconds=app_ctx.config.deploy.health_check_timeout_seconds,
+                    retries=app_ctx.config.deploy.health_check_retries,
+                    retry_delay_seconds=app_ctx.config.deploy.health_check_retry_delay_seconds,
+                    expected_status=app_ctx.config.deploy.health_check_expected_status,
+                    use_domain_host_header=app_ctx.config.deploy.health_check_use_domain_host_header,
+                )
+                if health_check["status"] == "failed":
+                    raise AppLifecycleError(f"Deploy health check failed: {health_check.get('detail', 'unknown')}")
                 deleted_releases = prune_releases(paths, app_ctx.config.deploy.keep_releases)
 
                 metadata = load_metadata(paths.metadata)
@@ -169,6 +220,9 @@ def init(
                     "ref": ref,
                     "deployed_at": datetime.now(UTC).isoformat(),
                     "source": str(source_path),
+                    "pre_activate_reports": pre_activate_reports,
+                    "post_activate_reports": post_activate_reports,
+                    "health_check": health_check,
                 }
                 save_metadata(paths.metadata, metadata)
                 app_ctx.emit_output(
@@ -177,7 +231,7 @@ def init(
                     release_id=release_id,
                     deleted_releases=deleted_releases,
                 )
-    except (CommandLockError, AppLifecycleError, ShellCommandError) as exc:
+    except (CommandLockError, AppLifecycleError, ShellCommandError, ReleaseServiceError) as exc:
         app_ctx.event_emitter.emit(
             EventRecord(
                 severity="error",

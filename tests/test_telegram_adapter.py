@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 from larops.services.telegram_adapter import TelegramAdapterConfig, dispatch_once
@@ -119,3 +120,50 @@ def test_dispatch_once_accepts_warning_alias(tmp_path: Path) -> None:
     assert report["delivered"] == 1
     assert sent
     assert "[WARN]" in sent[0]
+
+
+def test_dispatch_once_resets_offset_after_truncate(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    state_file = tmp_path / "telegram_state.json"
+    first_event = {
+        "event_id": "evt-5",
+        "severity": "error",
+        "event_type": "deploy.failed",
+        "host": "node-d",
+        "message": "failed" + ("x" * 512),
+    }
+    events_path.write_text(json.dumps(first_event) + "\n", encoding="utf-8")
+
+    sent: list[str] = []
+
+    def fake_sender(_token: str, _chat_id: str, text: str) -> None:
+        sent.append(text)
+
+    config = TelegramAdapterConfig(
+        events_path=events_path,
+        state_file=state_file,
+        bot_token="token",
+        chat_id="chat",
+        min_severity="warn",
+        batch_size=10,
+    )
+    first = dispatch_once(config, sender=fake_sender, apply=True)
+    assert first["delivered"] == 1
+
+    time.sleep(0.01)
+    second_event = {
+        "event_id": "evt-6",
+        "severity": "critical",
+        "event_type": "host.disk_high",
+        "host": "node-d",
+        "message": "disk high",
+    }
+    events_path.write_text(json.dumps(second_event) + "\n", encoding="utf-8")
+
+    second = dispatch_once(config, sender=fake_sender, apply=True)
+    assert second["delivered"] == 1
+    assert len(sent) == 2
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["offset"] > 0
+    assert state["device"] is not None
+    assert state["updated_at"] is not None

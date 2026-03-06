@@ -31,6 +31,7 @@ def build_issue_command(
     challenge: str,
     dns_provider: str | None,
     staging: bool,
+    webroot_path: str | None = None,
 ) -> list[str]:
     command = [
         "certbot",
@@ -45,7 +46,7 @@ def build_issue_command(
     else:
         command.append("--register-unsafely-without-email")
     if challenge == "http":
-        command += ["--webroot", "-w", "/var/www/html"]
+        command += ["--webroot", "-w", webroot_path or "/var/www/html"]
     elif challenge == "dns":
         if not dns_provider:
             raise SslServiceError("dns challenge requires --dns-provider")

@@ -130,6 +130,9 @@ def test_worker_lifecycle_commands(tmp_path: Path) -> None:
     restart = runner.invoke(app, ["--config", str(config), "worker", "restart", domain, "--apply"])
     assert restart.exit_code == 0
 
+    reconcile = runner.invoke(app, ["--config", str(config), "worker", "reconcile", domain, "--apply"])
+    assert reconcile.exit_code == 0
+
     status_after = runner.invoke(app, ["--config", str(config), "--json", "worker", "status", domain])
     payload_after = json_output(status_after.stdout)
     assert payload_after["process"]["restart_count"] == 1

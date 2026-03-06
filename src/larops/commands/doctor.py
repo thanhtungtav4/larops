@@ -20,6 +20,8 @@ def run(
         state_path=Path(app_ctx.config.state_path),
         events_path=Path(app_ctx.config.events.path),
         quick=False,
+        unit_dir=Path(app_ctx.config.systemd.unit_dir),
+        systemd_manage=app_ctx.config.systemd.manage,
     )
     if target != "host":
         checks.extend(
@@ -27,6 +29,8 @@ def run(
                 base_releases_path=Path(app_ctx.config.deploy.releases_path),
                 state_path=Path(app_ctx.config.state_path),
                 domain=target,
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
             )
         )
     report = summarize(checks)
@@ -43,6 +47,8 @@ def quick(
         state_path=Path(app_ctx.config.state_path),
         events_path=Path(app_ctx.config.events.path),
         quick=True,
+        unit_dir=Path(app_ctx.config.systemd.unit_dir),
+        systemd_manage=app_ctx.config.systemd.manage,
     )
     if target != "host":
         checks.extend(
@@ -50,8 +56,9 @@ def quick(
                 base_releases_path=Path(app_ctx.config.deploy.releases_path),
                 state_path=Path(app_ctx.config.state_path),
                 domain=target,
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
             )
         )
     report = summarize(checks)
     app_ctx.emit_output(report["overall"], f"Doctor quick report for {target}", target=target, report=report)
-

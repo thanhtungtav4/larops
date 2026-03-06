@@ -213,3 +213,54 @@ def test_site_delete_with_no_prompt(tmp_path: Path) -> None:
     )
     assert delete.exit_code == 0
     assert not (tmp_path / "apps" / "demo.test").exists()
+
+
+def test_site_restore_restores_runtime_and_secrets(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    secret = write_db_secret(tmp_path, "demo.test")
+    create = runner.invoke(
+        app,
+        ["--config", str(config), "site", "create", "demo.test", "--worker", "--apply"],
+    )
+    assert create.exit_code == 0
+
+    delete = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "site",
+            "delete",
+            "demo.test",
+            "--purge",
+            "--checkpoint-include-secrets",
+            "--confirm",
+            "demo.test",
+            "--apply",
+        ],
+    )
+    assert delete.exit_code == 0
+    checkpoint_file = Path(json.loads(delete.stdout.strip().splitlines()[-1])["checkpoint_file"])
+    assert checkpoint_file.exists()
+    assert not secret.exists()
+
+    restore = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "site",
+            "restore",
+            "demo.test",
+            "--checkpoint-file",
+            str(checkpoint_file),
+            "--restore-secrets",
+            "--apply",
+        ],
+    )
+    assert restore.exit_code == 0
+    assert (tmp_path / "apps" / "demo.test").exists()
+    assert (tmp_path / "state" / "runtime" / "demo.test" / "worker.json").exists()
+    assert secret.exists()

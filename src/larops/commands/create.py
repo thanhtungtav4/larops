@@ -15,7 +15,7 @@ from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_lifecycle import (
     AppLifecycleError,
-    deploy_release,
+    activate_release,
     get_app_paths,
     initialize_app,
     load_metadata,
@@ -23,8 +23,15 @@ from larops.services.app_lifecycle import (
     save_metadata,
     switch_current_symlink,
 )
+from larops.services.release_service import (
+    ReleaseServiceError,
+    prepare_release_candidate,
+    run_http_health_check,
+    run_release_commands,
+)
 from larops.services.runtime_process import RuntimeProcessError, enable_process
 from larops.services.runtime_process import disable_process as runtime_disable_process
+from larops.services.runtime_process import reconcile_process as runtime_reconcile_process
 from larops.services.runtime_process import status_process as runtime_status_process
 from larops.services.ssl_service import (
     SslServiceError,
@@ -379,6 +386,27 @@ def _status_runtime_for_site(
     return results
 
 
+def _reconcile_runtime_for_site(
+    *,
+    app_ctx: AppContext,
+    domain: str,
+    targets: dict[str, bool],
+) -> dict[str, dict]:
+    results: dict[str, dict] = {}
+    for process_type, enabled in targets.items():
+        if not enabled:
+            continue
+        results[process_type] = runtime_reconcile_process(
+            state_path=Path(app_ctx.config.state_path),
+            unit_dir=Path(app_ctx.config.systemd.unit_dir),
+            systemd_manage=app_ctx.config.systemd.manage,
+            domain=domain,
+            process_type=process_type,
+            policy=_runtime_policy_for(app_ctx, process_type),
+        )
+    return results
+
+
 def _run_site_runtime_mode(
     *,
     app_ctx: AppContext,
@@ -442,6 +470,8 @@ def _run_site_runtime_mode(
                     schedule_command=schedule_command,
                     targets=targets,
                 )
+            elif mode == "reconcile":
+                results = _reconcile_runtime_for_site(app_ctx=app_ctx, domain=domain, targets=targets)
             else:
                 results = _disable_runtime_for_site(app_ctx=app_ctx, domain=domain, targets=targets)
     except (CommandLockError, RuntimeProcessError) as exc:
@@ -529,7 +559,7 @@ def create_site(
     tries: int = typer.Option(3, "--tries", "-t", help="Worker tries."),
     timeout: int = typer.Option(90, "--timeout", help="Worker timeout in seconds."),
     schedule_command: str = typer.Option(
-        "php artisan schedule:run",
+        "php artisan schedule:work",
         "--schedule-command",
         help="Scheduler command.",
     ),
@@ -545,6 +575,12 @@ def create_site(
     le_email: str | None = typer.Option(None, "--le-email", help="Email for Let's Encrypt registration."),
     le_challenge: str = typer.Option("http", "--le-challenge", help="Challenge: http or dns."),
     le_dns_provider: str | None = typer.Option(None, "--le-dns-provider", help="DNS provider for dns challenge."),
+    le_webroot: Path | None = typer.Option(
+        None,
+        "--le-webroot",
+        help="HTTP challenge webroot path override.",
+        file_okay=False,
+    ),
     le_staging: bool = typer.Option(False, "--le-staging", help="Use Let's Encrypt staging environment."),
     atomic: bool = typer.Option(
         False,
@@ -598,20 +634,6 @@ def create_site(
             app_ctx.emit_output("error", str(exc))
             raise typer.Exit(code=2) from exc
 
-    ssl_issue_command: list[str] | None = None
-    if letsencrypt:
-        try:
-            ssl_issue_command = build_issue_command(
-                domain=domain,
-                email=le_email,
-                challenge=le_challenge,
-                dns_provider=le_dns_provider,
-                staging=le_staging,
-            )
-        except SslServiceError as exc:
-            app_ctx.emit_output("error", str(exc))
-            raise typer.Exit(code=2) from exc
-
     source_path = (
         source.resolve()
         if source is not None
@@ -622,6 +644,21 @@ def create_site(
         Path(app_ctx.config.state_path),
         domain,
     )
+    ssl_issue_command: list[str] | None = None
+    if letsencrypt:
+        try:
+            default_webroot = str((paths.current / "public").resolve(strict=False)) if le_challenge == "http" else None
+            ssl_issue_command = build_issue_command(
+                domain=domain,
+                email=le_email,
+                challenge=le_challenge,
+                dns_provider=le_dns_provider,
+                staging=le_staging,
+                webroot_path=str(le_webroot.resolve()) if le_webroot is not None else default_webroot,
+            )
+        except SslServiceError as exc:
+            app_ctx.emit_output("error", str(exc))
+            raise typer.Exit(code=2) from exc
     app_ctx.emit_output(
         "ok",
         f"Create site plan prepared for {domain}",
@@ -679,7 +716,37 @@ def create_site(
             initialize_app(paths, metadata_payload, overwrite=force)
 
             if deploy:
-                release_id = deploy_release(paths, source_path, ref)
+                release_id, release_dir = prepare_release_candidate(
+                    paths=paths,
+                    source_path=source_path,
+                    ref=ref,
+                    shared_dirs=app_ctx.config.deploy.shared_dirs,
+                    shared_files=app_ctx.config.deploy.shared_files,
+                )
+                pre_activate_reports = run_release_commands(
+                    workdir=release_dir,
+                    commands=list(app_ctx.config.deploy.pre_activate_commands),
+                )
+                activate_release(paths, release_dir)
+                current_path = paths.current.resolve(strict=True)
+                post_activate_reports = run_release_commands(
+                    workdir=current_path,
+                    commands=list(app_ctx.config.deploy.post_activate_commands),
+                )
+                health_check = run_http_health_check(
+                    domain=domain,
+                    path=app_ctx.config.deploy.health_check_path,
+                    enabled=app_ctx.config.deploy.health_check_enabled,
+                    scheme=app_ctx.config.deploy.health_check_scheme,
+                    host=app_ctx.config.deploy.health_check_host,
+                    timeout_seconds=app_ctx.config.deploy.health_check_timeout_seconds,
+                    retries=app_ctx.config.deploy.health_check_retries,
+                    retry_delay_seconds=app_ctx.config.deploy.health_check_retry_delay_seconds,
+                    expected_status=app_ctx.config.deploy.health_check_expected_status,
+                    use_domain_host_header=app_ctx.config.deploy.health_check_use_domain_host_header,
+                )
+                if health_check["status"] == "failed":
+                    raise AppLifecycleError(f"Deploy health check failed: {health_check.get('detail', 'unknown')}")
                 deleted_releases = prune_releases(paths, app_ctx.config.deploy.keep_releases)
                 metadata = load_metadata(paths.metadata)
                 metadata["last_deploy"] = {
@@ -687,6 +754,9 @@ def create_site(
                     "ref": ref,
                     "deployed_at": datetime.now(UTC).isoformat(),
                     "source": str(source_path),
+                    "pre_activate_reports": pre_activate_reports,
+                    "post_activate_reports": post_activate_reports,
+                    "health_check": health_check,
                 }
                 save_metadata(paths.metadata, metadata)
 
@@ -713,7 +783,7 @@ def create_site(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError) as exc:
+    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError, ReleaseServiceError) as exc:
         if atomic:
             rollback_steps = _atomic_rollback_create_site(
                 app_ctx=app_ctx,

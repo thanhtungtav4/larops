@@ -12,7 +12,7 @@ from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_lifecycle import (
     AppLifecycleError,
-    deploy_release,
+    activate_release,
     get_app_paths,
     get_current_release,
     initialize_app,
@@ -22,6 +22,14 @@ from larops.services.app_lifecycle import (
     resolve_rollback_target,
     rollback_release,
     save_metadata,
+)
+from larops.services.release_service import (
+    ReleaseServiceError,
+    prepare_release_candidate,
+    refresh_runtime_after_activate,
+    remove_release_dir,
+    run_http_health_check,
+    run_release_commands,
 )
 
 app_cmd = typer.Typer(help="Manage Laravel application lifecycle.")
@@ -188,7 +196,51 @@ def deploy(
     try:
         with CommandLock(_lock_name(domain)):
             metadata = load_metadata(paths.metadata)
-            release_id = deploy_release(paths, source_path, ref)
+            previous_release = get_current_release(paths)
+            release_id, release_dir = prepare_release_candidate(
+                paths=paths,
+                source_path=source_path,
+                ref=ref,
+                shared_dirs=app_ctx.config.deploy.shared_dirs,
+                shared_files=app_ctx.config.deploy.shared_files,
+            )
+            pre_activate_reports = run_release_commands(
+                workdir=release_dir,
+                commands=list(app_ctx.config.deploy.pre_activate_commands),
+            )
+            activate_release(paths, release_dir)
+            current_path = paths.current.resolve(strict=True)
+            post_activate_reports = run_release_commands(
+                workdir=current_path,
+                commands=list(app_ctx.config.deploy.post_activate_commands),
+            )
+            health_check = run_http_health_check(
+                domain=domain,
+                path=app_ctx.config.deploy.health_check_path,
+                enabled=app_ctx.config.deploy.health_check_enabled,
+                scheme=app_ctx.config.deploy.health_check_scheme,
+                host=app_ctx.config.deploy.health_check_host,
+                timeout_seconds=app_ctx.config.deploy.health_check_timeout_seconds,
+                retries=app_ctx.config.deploy.health_check_retries,
+                retry_delay_seconds=app_ctx.config.deploy.health_check_retry_delay_seconds,
+                expected_status=app_ctx.config.deploy.health_check_expected_status,
+                use_domain_host_header=app_ctx.config.deploy.health_check_use_domain_host_header,
+            )
+            if health_check["status"] == "failed":
+                if app_ctx.config.deploy.rollback_on_health_check_failure and previous_release:
+                    rollback_release(paths, previous_release)
+                    remove_release_dir(release_dir)
+                    raise AppLifecycleError(
+                        f"Deploy health check failed after activate and rollback was applied: {health_check.get('detail', 'unknown')}"
+                    )
+                raise AppLifecycleError(f"Deploy health check failed: {health_check.get('detail', 'unknown')}")
+            runtime_refresh = refresh_runtime_after_activate(
+                state_path=Path(app_ctx.config.state_path),
+                current_path=current_path,
+                domain=domain,
+                strategy=app_ctx.config.deploy.runtime_refresh_strategy,
+                systemd_manage=app_ctx.config.systemd.manage,
+            )
             deleted_releases = prune_releases(paths, keep_releases)
 
             metadata["last_deploy"] = {
@@ -196,12 +248,16 @@ def deploy(
                 "ref": ref,
                 "deployed_at": datetime.now(UTC).isoformat(),
                 "source": str(source_path),
+                "pre_activate_reports": pre_activate_reports,
+                "post_activate_reports": post_activate_reports,
+                "health_check": health_check,
+                "runtime_refresh": runtime_refresh,
             }
             save_metadata(paths.metadata, metadata)
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except AppLifecycleError as exc:
+    except (AppLifecycleError, ReleaseServiceError) as exc:
         _emit_event(
             app_ctx,
             severity="error",
@@ -226,6 +282,8 @@ def deploy(
         f"Deployment completed for {domain}",
         release_id=release_id,
         deleted_releases=deleted_releases,
+        health_check=health_check,
+        runtime_refresh=runtime_refresh,
     )
 
 
@@ -276,18 +334,53 @@ def rollback(
     )
 
     try:
+        current_release_before = get_current_release(paths)
         with CommandLock(_lock_name(domain)):
             rollback_release(paths, target)
+            current_path = paths.current.resolve(strict=True)
+            post_activate_reports = run_release_commands(
+                workdir=current_path,
+                commands=list(app_ctx.config.deploy.post_activate_commands),
+            )
+            health_check = run_http_health_check(
+                domain=domain,
+                path=app_ctx.config.deploy.health_check_path,
+                enabled=app_ctx.config.deploy.health_check_enabled,
+                scheme=app_ctx.config.deploy.health_check_scheme,
+                host=app_ctx.config.deploy.health_check_host,
+                timeout_seconds=app_ctx.config.deploy.health_check_timeout_seconds,
+                retries=app_ctx.config.deploy.health_check_retries,
+                retry_delay_seconds=app_ctx.config.deploy.health_check_retry_delay_seconds,
+                expected_status=app_ctx.config.deploy.health_check_expected_status,
+                use_domain_host_header=app_ctx.config.deploy.health_check_use_domain_host_header,
+            )
+            if health_check["status"] == "failed":
+                if app_ctx.config.deploy.rollback_on_health_check_failure and current_release_before:
+                    rollback_release(paths, current_release_before)
+                    raise AppLifecycleError(
+                        f"Rollback health check failed and previous release was restored: {health_check.get('detail', 'unknown')}"
+                    )
+                raise AppLifecycleError(f"Rollback health check failed: {health_check.get('detail', 'unknown')}")
+            runtime_refresh = refresh_runtime_after_activate(
+                state_path=Path(app_ctx.config.state_path),
+                current_path=current_path,
+                domain=domain,
+                strategy=app_ctx.config.deploy.runtime_refresh_strategy,
+                systemd_manage=app_ctx.config.systemd.manage,
+            )
             metadata = load_metadata(paths.metadata)
             metadata["last_rollback"] = {
                 "target": target,
                 "rolled_back_at": datetime.now(UTC).isoformat(),
+                "post_activate_reports": post_activate_reports,
+                "health_check": health_check,
+                "runtime_refresh": runtime_refresh,
             }
             save_metadata(paths.metadata, metadata)
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except AppLifecycleError as exc:
+    except (AppLifecycleError, ReleaseServiceError) as exc:
         _emit_event(
             app_ctx,
             severity="error",
@@ -307,7 +400,13 @@ def rollback(
         message="Rollback completed.",
         metadata={"target": target},
     )
-    app_ctx.emit_output("ok", f"Rollback completed for {domain}", target=target)
+    app_ctx.emit_output(
+        "ok",
+        f"Rollback completed for {domain}",
+        target=target,
+        health_check=health_check,
+        runtime_refresh=runtime_refresh,
+    )
 
 
 @app_cmd.command("info")

@@ -6,11 +6,13 @@ from pathlib import Path
 
 import typer
 
+from larops.config import DEFAULT_CONFIG_PATH
 from larops.core.locks import CommandLock, CommandLockError
 from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.db_service import (
+    backup_status,
     DbServiceError,
     backup_filename,
     build_backup_command,
@@ -18,16 +20,29 @@ from larops.services.db_service import (
     default_backup_dir,
     default_credential_file,
     list_backups,
+    manifest_path,
     normalize_db_engine,
+    prune_backups,
+    read_backup_manifest,
     run_backup,
     run_restore,
+    verify_backup,
+    write_backup_manifest,
     write_mysql_credentials,
     write_postgres_credentials,
+)
+from larops.services.db_systemd import (
+    DbAutoBackupError,
+    disable_db_backup_timer,
+    enable_db_backup_timer,
+    status_db_backup_timer,
 )
 
 db_app = typer.Typer(help="Manage database backup and restore.")
 credential_app = typer.Typer(help="Manage secure DB credentials.")
+auto_backup_app = typer.Typer(help="Manage DB auto-backup timer.")
 db_app.add_typer(credential_app, name="credential")
+db_app.add_typer(auto_backup_app, name="auto-backup")
 
 
 def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, metadata: dict | None = None) -> None:
@@ -50,6 +65,10 @@ def _resolve_credential_path(
     engine: str,
 ) -> Path:
     return credential_file or default_credential_file(Path(app_ctx.config.state_path), domain, engine=engine)
+
+
+def _resolve_cli_config_path(app_ctx: AppContext) -> Path:
+    return app_ctx.config_path or DEFAULT_CONFIG_PATH
 
 
 @credential_app.command("set")
@@ -176,6 +195,7 @@ def backup(
         dir_okay=False,
     ),
     target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
+    retain_count: int = typer.Option(10, "--retain-count", help="Keep at most this many backups per domain."),
     apply: bool = typer.Option(False, "--apply", help="Apply backup operation."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
@@ -208,6 +228,7 @@ def backup(
         backup_file=str(backup_file),
         credential_file=str(secret_file),
         command=command_preview,
+        retain_count=retain_count,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -227,13 +248,33 @@ def backup(
     try:
         with CommandLock("db-backup"):
             output = run_backup(command)
+            manifest = write_backup_manifest(
+                backup_file=backup_file,
+                domain=domain,
+                engine=normalized_engine,
+                database=database,
+            )
+            deleted = prune_backups(backup_dir=backup_dir, retain_count=retain_count)
     except (CommandLockError, ShellCommandError, DbServiceError) as exc:
         _emit(app_ctx, "error", "db.backup.failed", "DB backup failed.", {"error": str(exc), "domain": domain})
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=1) from exc
 
-    _emit(app_ctx, "info", "db.backup.completed", "DB backup completed.", {"domain": domain, "file": str(backup_file)})
-    app_ctx.emit_output("ok", f"DB backup completed for {domain}", backup_file=str(backup_file), output=output)
+    _emit(
+        app_ctx,
+        "info",
+        "db.backup.completed",
+        "DB backup completed.",
+        {"domain": domain, "file": str(backup_file), "manifest": str(manifest), "deleted": deleted},
+    )
+    app_ctx.emit_output(
+        "ok",
+        f"DB backup completed for {domain}",
+        backup_file=str(backup_file),
+        manifest_file=str(manifest),
+        deleted_backups=deleted,
+        output=output,
+    )
 
 
 @db_app.command("restore")
@@ -304,6 +345,56 @@ def restore(
     app_ctx.emit_output("ok", f"DB restore completed for {domain}", output=output)
 
 
+@db_app.command("status")
+def status(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
+    stale_hours: int = typer.Option(24, "--stale-hours", help="Warn if latest backup is older than this many hours."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    if stale_hours < 1:
+        app_ctx.emit_output("error", "--stale-hours must be >= 1.")
+        raise typer.Exit(code=2)
+    backup_dir = target_dir or default_backup_dir(Path(app_ctx.config.state_path), domain)
+    summary = backup_status(backup_dir=backup_dir, stale_hours=stale_hours)
+    if summary["latest_backup"]:
+        latest_backup = Path(summary["latest_backup"])
+        summary["manifest"] = read_backup_manifest(latest_backup)
+        summary["manifest_file"] = str(manifest_path(latest_backup))
+    app_ctx.emit_output(summary["status"], f"DB backup status for {domain}", domain=domain, status_report=summary)
+
+
+@db_app.command("verify")
+def verify(
+    ctx: typer.Context,
+    backup_file: Path = typer.Option(..., "--backup-file", help="Backup file path.", dir_okay=False),
+    manifest_file: Path | None = typer.Option(None, "--manifest-file", help="Manifest file path.", dir_okay=False),
+    check_gzip: bool = typer.Option(True, "--check-gzip/--no-check-gzip", help="Validate gzip stream integrity."),
+    require_manifest: bool = typer.Option(
+        False,
+        "--require-manifest/--allow-missing-manifest",
+        help="Fail if the manifest file is missing.",
+    ),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        result = verify_backup(
+            backup_file=backup_file,
+            manifest_file=manifest_file,
+            check_gzip=check_gzip,
+            require_manifest=require_manifest,
+        )
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    if result["status"] == "error":
+        app_ctx.emit_output("error", "DB backup verification failed.", verification=result)
+        raise typer.Exit(code=2)
+    app_ctx.emit_output(result["status"], "DB backup verification completed.", verification=result)
+
+
 @db_app.command("list-backups")
 def list_backup_files(
     ctx: typer.Context,
@@ -321,3 +412,121 @@ def list_backup_files(
         backups=files,
         count=len(files),
     )
+
+
+@auto_backup_app.command("enable")
+def auto_backup_enable(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
+    database: str = typer.Option(..., "--database", help="Database name."),
+    on_calendar: str = typer.Option("*-*-* 02:00:00", "--on-calendar", help="systemd OnCalendar schedule."),
+    randomized_delay: int = typer.Option(900, "--randomized-delay", help="RandomizedDelaySec in seconds."),
+    user: str = typer.Option("root", "--user", help="System user used by backup service."),
+    larops_bin: str = typer.Option("/usr/local/bin/larops", "--larops-bin", help="LarOps executable path."),
+    credential_file: Path | None = typer.Option(None, "--credential-file", help="Credential file path.", dir_okay=False),
+    target_dir: Path | None = typer.Option(None, "--target-dir", help="Backup directory.", file_okay=False),
+    retain_count: int = typer.Option(10, "--retain-count", help="Keep at most this many backups per domain."),
+    apply: bool = typer.Option(False, "--apply", help="Apply auto-backup setup."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    resolved_credential_file = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
+    resolved_target_dir = target_dir or default_backup_dir(Path(app_ctx.config.state_path), domain)
+    config_path = _resolve_cli_config_path(app_ctx)
+
+    app_ctx.emit_output(
+        "ok",
+        f"DB auto-backup enable plan prepared for {domain}",
+        domain=domain,
+        engine=normalized_engine,
+        database=database,
+        on_calendar=on_calendar,
+        randomized_delay=randomized_delay,
+        user=user,
+        larops_bin=larops_bin,
+        config_path=str(config_path),
+        credential_file=str(resolved_credential_file),
+        target_dir=str(resolved_target_dir),
+        retain_count=retain_count,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock(f"db-auto-backup-enable-{domain}"):
+            result = enable_db_backup_timer(
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                user=user,
+                domain=domain,
+                on_calendar=on_calendar,
+                randomized_delay_seconds=randomized_delay,
+                larops_bin=larops_bin,
+                config_path=config_path,
+                engine=normalized_engine,
+                database=database,
+                credential_file=resolved_credential_file,
+                target_dir=resolved_target_dir,
+                retain_count=retain_count,
+            )
+    except (CommandLockError, DbAutoBackupError) as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+    app_ctx.emit_output("ok", f"DB auto-backup enabled for {domain}", auto_backup=result)
+
+
+@auto_backup_app.command("disable")
+def auto_backup_disable(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    remove_units: bool = typer.Option(False, "--remove-units", help="Remove timer/service unit files after disable."),
+    apply: bool = typer.Option(False, "--apply", help="Apply auto-backup disable."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    app_ctx.emit_output(
+        "ok",
+        f"DB auto-backup disable plan prepared for {domain}",
+        domain=domain,
+        remove_units=remove_units,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock(f"db-auto-backup-disable-{domain}"):
+            result = disable_db_backup_timer(
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                domain=domain,
+                remove_units=remove_units,
+            )
+    except (CommandLockError, DbAutoBackupError) as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+    app_ctx.emit_output("ok", f"DB auto-backup disabled for {domain}", auto_backup=result)
+
+
+@auto_backup_app.command("status")
+def auto_backup_status(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    result = status_db_backup_timer(
+        unit_dir=Path(app_ctx.config.systemd.unit_dir),
+        systemd_manage=app_ctx.config.systemd.manage,
+        domain=domain,
+    )
+    app_ctx.emit_output("ok", f"DB auto-backup status for {domain}", auto_backup=result)

@@ -16,6 +16,20 @@ class DeployConfig(BaseModel):
     source_base_path: str = "/var/www/source"
     keep_releases: int = 5
     health_check_path: str = "/up"
+    health_check_enabled: bool = False
+    health_check_scheme: str = "http"
+    health_check_host: str = "127.0.0.1"
+    health_check_timeout_seconds: int = 5
+    health_check_retries: int = 3
+    health_check_retry_delay_seconds: int = 1
+    health_check_expected_status: int = 200
+    health_check_use_domain_host_header: bool = True
+    rollback_on_health_check_failure: bool = False
+    runtime_refresh_strategy: str = "none"
+    shared_dirs: list[str] = Field(default_factory=lambda: ["storage", "bootstrap/cache"])
+    shared_files: list[str] = Field(default_factory=lambda: [".env"])
+    pre_activate_commands: list[str] = Field(default_factory=list)
+    post_activate_commands: list[str] = Field(default_factory=list)
 
 
 class EventsConfig(BaseModel):

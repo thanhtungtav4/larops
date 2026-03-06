@@ -27,20 +27,12 @@ def _sanitize_domain(domain: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "-", domain).strip("-")
 
 
-def service_name(domain: str, process_type: str) -> str:
-    return f"larops-{_sanitize_domain(domain)}-{process_type}.service"
-
-
 def _runtime_dir(state_path: Path, domain: str) -> Path:
     return state_path / "runtime" / domain
 
 
 def _spec_path(state_path: Path, domain: str, process_type: str) -> Path:
     return _runtime_dir(state_path, domain) / f"{process_type}.json"
-
-
-def _unit_path(unit_dir: Path, domain: str, process_type: str) -> Path:
-    return unit_dir / service_name(domain, process_type)
 
 
 def _utc_now() -> str:
@@ -131,6 +123,14 @@ def _shell_double_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _worker_replicas(options: dict[str, Any]) -> int:
+    try:
+        replicas = int(options.get("concurrency", 1))
+    except (TypeError, ValueError):
+        replicas = 1
+    return max(1, replicas)
+
+
 def ensure_app_registered(base_releases_path: Path, state_path: Path, domain: str) -> dict[str, Any]:
     paths = get_app_paths(base_releases_path, state_path, domain)
     try:
@@ -159,31 +159,29 @@ def _exec_start_command(process_type: str, app_current_path: Path, options: dict
     app_path_arg = _shell_double_quote(app_path)
     if process_type == "worker":
         queue = options.get("queue", "default")
-        concurrency = max(1, int(options.get("concurrency", 1)))
         tries = int(options.get("tries", 3))
         timeout = int(options.get("timeout", 90))
+        max_jobs = max(1, int(options.get("max_jobs", 500)))
+        max_time = max(1, int(options.get("max_time", 3600)))
         worker_cmd = (
             "php artisan queue:work"
             f" --queue={shlex.quote(str(queue))}"
             f" --tries={tries}"
             f" --timeout={timeout}"
-            " --sleep=1 --max-jobs=0 --max-time=0 --verbose"
+            f" --max-jobs={max_jobs}"
+            f" --max-time={max_time}"
+            " --sleep=1 --verbose"
         )
-        if concurrency == 1:
-            script = f"cd {app_path_arg} && {worker_cmd}"
-            return f"bash -lc {shlex.quote(script)}"
-        script = (
-            f"cd {app_path_arg} && "
-            f"for i in $(seq 1 {concurrency}); do {worker_cmd} & done; "
-            "wait"
-        )
+        script = f"cd {app_path_arg} && exec {worker_cmd}"
         return f"bash -lc {shlex.quote(script)}"
     if process_type == "scheduler":
-        command = options.get("command", "php artisan schedule:run")
-        script = f"cd {app_path_arg} && while true; do {command}; sleep 60; done"
+        command = str(options.get("command", "php artisan schedule:work")).strip()
+        if not command:
+            raise RuntimeProcessError("Scheduler command cannot be empty.")
+        script = f"cd {app_path_arg} && exec {command}"
         return f"bash -lc {shlex.quote(script)}"
     if process_type == "horizon":
-        script = f"cd {app_path_arg} && php artisan horizon"
+        script = f"cd {app_path_arg} && exec php artisan horizon"
         return f"bash -lc {shlex.quote(script)}"
     raise RuntimeProcessError(f"Unsupported process type: {process_type}")
 
@@ -246,6 +244,27 @@ def _systemd_status(service: str) -> dict[str, Any]:
     }
 
 
+def _service_names(domain: str, process_type: str, options: dict[str, Any] | None = None, spec: dict[str, Any] | None = None) -> list[str]:
+    if spec and isinstance(spec.get("service_names"), list):
+        return [str(item) for item in spec["service_names"] if str(item).strip()]
+    if process_type == "worker":
+        replicas = _worker_replicas(spec.get("options", {}) if spec else options or {})
+        if replicas > 1:
+            return [service_name(domain, process_type, replica=index) for index in range(1, replicas + 1)]
+    return [service_name(domain, process_type)]
+
+
+def service_name(domain: str, process_type: str, *, replica: int | None = None) -> str:
+    base = f"larops-{_sanitize_domain(domain)}-{process_type}"
+    if replica is not None:
+        return f"{base}-{replica}.service"
+    return f"{base}.service"
+
+
+def _unit_paths(unit_dir: Path, domain: str, process_type: str, options: dict[str, Any] | None = None, spec: dict[str, Any] | None = None) -> list[Path]:
+    return [unit_dir / name for name in _service_names(domain, process_type, options=options, spec=spec)]
+
+
 def enable_process(
     *,
     base_releases_path: Path,
@@ -266,7 +285,8 @@ def enable_process(
         )
 
     existing = _read_spec(state_path, domain, process_type) or {}
-    service = service_name(domain, process_type)
+    service_names = _service_names(domain, process_type, options=options)
+    primary_service = service_names[0]
     normalized_policy = _normalize_policy(policy or existing.get("policy"))
     spec = {
         **existing,
@@ -274,10 +294,12 @@ def enable_process(
         "process_type": process_type,
         "enabled": True,
         "autostart": True,
-        "service_name": service,
+        "service_name": primary_service,
+        "service_names": service_names,
         "systemd_managed": systemd_manage,
         "options": options,
         "policy": normalized_policy,
+        "replicas": len(service_names),
         "updated_at": _utc_now(),
     }
     if "created_at" not in spec:
@@ -290,15 +312,17 @@ def enable_process(
     spec.setdefault("auto_heal_count", 0)
 
     _write_spec(state_path, domain, process_type, spec)
-    unit = render_systemd_unit(domain, process_type, app_paths.current, options, user=service_user)
-    unit_path = _unit_path(unit_dir, domain, process_type)
-    unit_path.parent.mkdir(parents=True, exist_ok=True)
-    unit_path.write_text(unit, encoding="utf-8")
+    unit_paths = _unit_paths(unit_dir, domain, process_type, options=options)
+    for unit_path in unit_paths:
+        unit = render_systemd_unit(domain, process_type, app_paths.current, options, user=service_user)
+        unit_path.parent.mkdir(parents=True, exist_ok=True)
+        unit_path.write_text(unit, encoding="utf-8")
 
     if systemd_manage:
         try:
             _run_systemctl(["daemon-reload"], check=True)
-            _run_systemctl(["enable", "--now", service], check=True)
+            for service in service_names:
+                _run_systemctl(["enable", "--now", service], check=True)
         except ShellCommandError as exc:
             raise RuntimeProcessError(str(exc)) from exc
 
@@ -315,20 +339,23 @@ def disable_process(
 ) -> dict[str, Any]:
     ensure_app_registered(base_releases_path, state_path, domain)
     existing = _read_spec(state_path, domain, process_type)
-    service = service_name(domain, process_type)
+    service_names = _service_names(domain, process_type, spec=existing)
+    primary_service = service_names[0]
     if existing is None:
         spec = {
             "domain": domain,
             "process_type": process_type,
             "enabled": False,
             "autostart": False,
-            "service_name": service,
+            "service_name": primary_service,
+            "service_names": service_names,
             "updated_at": _utc_now(),
             "created_at": _utc_now(),
             "restart_count": 0,
             "terminate_count": 0,
             "run_count": 0,
             "options": {},
+            "replicas": len(service_names),
         }
     else:
         spec = {
@@ -339,7 +366,8 @@ def disable_process(
         }
 
     if systemd_manage:
-        run_command(["systemctl", "disable", "--now", service], check=False)
+        for service in spec.get("service_names", service_names):
+            run_command(["systemctl", "disable", "--now", str(service)], check=False)
     return _write_spec(state_path, domain, process_type, spec)
 
 
@@ -350,6 +378,7 @@ def restart_process(
     domain: str,
     process_type: str,
     policy: dict[str, Any] | None = None,
+    source: str = "manual",
 ) -> dict[str, Any]:
     spec = _read_spec(state_path, domain, process_type)
     if spec is None or not spec.get("enabled"):
@@ -360,15 +389,81 @@ def restart_process(
     history = _check_restart_policy(spec, normalized_policy, now=now)
 
     if systemd_manage:
-        service = spec.get("service_name") or service_name(domain, process_type)
+        services = _service_names(domain, process_type, spec=spec)
         try:
-            _run_systemctl(["restart", service], check=True)
+            for service in services:
+                _run_systemctl(["restart", service], check=True)
         except ShellCommandError as exc:
             raise RuntimeProcessError(str(exc)) from exc
 
     spec["policy"] = normalized_policy
-    _record_restart(spec, normalized_policy, history, now=now, source="manual")
+    _record_restart(spec, normalized_policy, history, now=now, source=source)
     return _write_spec(state_path, domain, process_type, spec)
+
+
+def reconcile_process(
+    *,
+    state_path: Path,
+    unit_dir: Path,
+    systemd_manage: bool,
+    domain: str,
+    process_type: str,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    spec = _read_spec(state_path, domain, process_type)
+    if spec is None or not spec.get("enabled"):
+        raise RuntimeProcessError(f"{process_type} is not enabled for {domain}.")
+
+    before = status_process(
+        state_path=state_path,
+        unit_dir=unit_dir,
+        systemd_manage=systemd_manage,
+        domain=domain,
+        process_type=process_type,
+        policy=policy or spec.get("policy"),
+    )
+    if not systemd_manage:
+        return {
+            "domain": domain,
+            "process_type": process_type,
+            "action": "skipped",
+            "reason": "systemd management disabled",
+            "before": before,
+            "after": before,
+        }
+    if before["systemd"]["active"] == "active":
+        return {
+            "domain": domain,
+            "process_type": process_type,
+            "action": "noop",
+            "before": before,
+            "after": before,
+        }
+
+    updated_spec = restart_process(
+        state_path=state_path,
+        systemd_manage=systemd_manage,
+        domain=domain,
+        process_type=process_type,
+        policy=policy or spec.get("policy"),
+        source="reconcile",
+    )
+    after = status_process(
+        state_path=state_path,
+        unit_dir=unit_dir,
+        systemd_manage=systemd_manage,
+        domain=domain,
+        process_type=process_type,
+        policy=policy or updated_spec.get("policy"),
+    )
+    return {
+        "domain": domain,
+        "process_type": process_type,
+        "action": "restart",
+        "before": before,
+        "after": after,
+        "spec": updated_spec,
+    }
 
 
 def terminate_process(
@@ -405,67 +500,63 @@ def status_process(
     policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec = _read_spec(state_path, domain, process_type)
-    unit_path = _unit_path(unit_dir, domain, process_type)
     service = service_name(domain, process_type)
     normalized_policy = _normalize_policy(policy)
     if spec is None:
+        unit_paths = _unit_paths(unit_dir, domain, process_type)
         return {
             "domain": domain,
             "process_type": process_type,
             "enabled": False,
             "exists": False,
             "service_name": service,
-            "unit_path": str(unit_path),
+            "service_names": [service],
+            "unit_path": str(unit_paths[0]),
+            "unit_paths": [str(path) for path in unit_paths],
             "policy": normalized_policy,
             "systemd": _systemd_status(service) if systemd_manage else {"active": "unmanaged", "enabled": "unmanaged"},
         }
 
     policy_payload = _normalize_policy(policy or spec.get("policy"))
     spec["policy"] = policy_payload
-    systemd_state = (
-        _systemd_status(service) if systemd_manage else {"active": "unmanaged", "enabled": "unmanaged"}
-    )
+    services = _service_names(domain, process_type, spec=spec)
+    unit_paths = _unit_paths(unit_dir, domain, process_type, spec=spec)
+    systemd_services = []
+    if systemd_manage:
+        for service_name_value in services:
+            systemd_services.append({"service_name": service_name_value, **_systemd_status(service_name_value)})
+    else:
+        for service_name_value in services:
+            systemd_services.append({"service_name": service_name_value, "active": "unmanaged", "enabled": "unmanaged"})
+
+    if systemd_manage:
+        active_states = {item["active"] for item in systemd_services}
+        enabled_states = {item["enabled"] for item in systemd_services}
+        overall_active = "active" if active_states <= {"active"} else "degraded" if "active" in active_states else next(iter(active_states), "unknown")
+        overall_enabled = "enabled" if enabled_states <= {"enabled"} else "mixed" if "enabled" in enabled_states else next(iter(enabled_states), "unknown")
+    else:
+        overall_active = "unmanaged"
+        overall_enabled = "unmanaged"
+
+    auto_heal_status = "disabled"
+    if bool(policy_payload["auto_heal"]) and spec.get("enabled"):
+        auto_heal_status = "healthy" if overall_active == "active" else "degraded"
     auto_heal: dict[str, Any] = {
         "enabled": bool(policy_payload["auto_heal"]),
         "attempted": False,
-        "status": "skipped",
+        "status": auto_heal_status,
     }
-    if systemd_manage and spec.get("enabled") and bool(policy_payload["auto_heal"]):
-        if systemd_state["active"] not in {"active", "activating", "reloading"}:
-            now = datetime.now(UTC)
-            try:
-                history = _check_restart_policy(spec, policy_payload, now=now)
-                _run_systemctl(["restart", service], check=True)
-                _record_restart(spec, policy_payload, history, now=now, source="auto-heal")
-                spec["auto_heal_count"] = int(spec.get("auto_heal_count", 0)) + 1
-                spec["last_auto_heal_at"] = now.isoformat()
-                spec.pop("last_auto_heal_error", None)
-                _write_spec(state_path, domain, process_type, spec)
-                systemd_state = _systemd_status(service)
-                auto_heal = {"enabled": True, "attempted": True, "status": "healed"}
-            except RuntimeProcessError as exc:
-                spec["last_auto_heal_error"] = str(exc)
-                spec["updated_at"] = _utc_now()
-                _write_spec(state_path, domain, process_type, spec)
-                auto_heal = {"enabled": True, "attempted": True, "status": "blocked", "detail": str(exc)}
-            except ShellCommandError as exc:
-                spec["last_auto_heal_error"] = str(exc)
-                spec["updated_at"] = _utc_now()
-                _write_spec(state_path, domain, process_type, spec)
-                auto_heal = {"enabled": True, "attempted": True, "status": "error", "detail": str(exc)}
-        else:
-            auto_heal = {"enabled": True, "attempted": False, "status": "healthy"}
-    elif systemd_manage and spec.get("enabled"):
-        auto_heal = {"enabled": False, "attempted": False, "status": "disabled"}
 
     return {
         **spec,
         "exists": True,
         "service_name": service,
-        "unit_path": str(unit_path),
+        "service_names": services,
+        "unit_path": str(unit_paths[0]),
+        "unit_paths": [str(path) for path in unit_paths],
         "policy": policy_payload,
         "auto_heal": auto_heal,
-        "systemd": systemd_state,
+        "systemd": {"active": overall_active, "enabled": overall_enabled, "services": systemd_services},
     }
 
 

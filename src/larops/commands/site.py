@@ -12,7 +12,13 @@ from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.permissions_service import PermissionServiceError, reassign_site_permissions
 from larops.services.runtime_process import RuntimeProcessError
-from larops.services.site_delete import SiteDeleteError, create_delete_checkpoint, default_checkpoint_dir, purge_site
+from larops.services.site_delete import (
+    SiteDeleteError,
+    create_delete_checkpoint,
+    default_checkpoint_dir,
+    purge_site,
+    restore_site_checkpoint,
+)
 
 site_app = typer.Typer(help="Site lifecycle shortcuts.")
 runtime_app = typer.Typer(help="Manage runtime services for a site.")
@@ -142,7 +148,7 @@ def runtime_enable(
     tries: int = typer.Option(3, "--tries", "-t", help="Worker tries."),
     timeout: int = typer.Option(90, "--timeout", help="Worker timeout in seconds."),
     schedule_command: str = typer.Option(
-        "php artisan schedule:run",
+        "php artisan schedule:work",
         "--schedule-command",
         help="Scheduler command.",
     ),
@@ -183,7 +189,7 @@ def runtime_disable(
         concurrency=1,
         tries=3,
         timeout=90,
-        schedule_command="php artisan schedule:run",
+        schedule_command="php artisan schedule:work",
         apply=apply,
         worker=worker,
         scheduler=scheduler,
@@ -208,8 +214,34 @@ def runtime_status(
         concurrency=1,
         tries=3,
         timeout=90,
-        schedule_command="php artisan schedule:run",
+        schedule_command="php artisan schedule:work",
         apply=False,
+        worker=worker,
+        scheduler=scheduler,
+        horizon=horizon,
+    )
+
+
+@runtime_app.command("reconcile")
+def runtime_reconcile(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Site domain."),
+    worker: bool = typer.Option(False, "--worker/--no-worker", "-w", help="Reconcile worker only."),
+    scheduler: bool = typer.Option(False, "--scheduler/--no-scheduler", "-s", help="Reconcile scheduler only."),
+    horizon: bool = typer.Option(False, "--horizon/--no-horizon", help="Reconcile horizon only."),
+    apply: bool = typer.Option(False, "--apply", "-a", help="Apply runtime reconcile."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    manage_site_runtime(
+        app_ctx=app_ctx,
+        mode="reconcile",
+        domain=domain,
+        queue="default",
+        concurrency=1,
+        tries=3,
+        timeout=90,
+        schedule_command="php artisan schedule:work",
+        apply=apply,
         worker=worker,
         scheduler=scheduler,
         horizon=horizon,
@@ -329,3 +361,77 @@ def site_delete(
         checkpoint_file=checkpoint_file,
         result=result,
     )
+
+
+@site_app.command("restore")
+def site_restore(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Site domain."),
+    checkpoint_file: Path = typer.Option(..., "--checkpoint-file", help="Checkpoint archive path.", dir_okay=False),
+    restore_runtime: bool = typer.Option(
+        True,
+        "--restore-runtime/--no-restore-runtime",
+        help="Recreate runtime specs and systemd units from checkpoint.",
+    ),
+    restore_secrets: bool = typer.Option(
+        False,
+        "--restore-secrets/--no-restore-secrets",
+        help="Restore DB secret file if present in checkpoint.",
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing target paths."),
+    apply: bool = typer.Option(False, "--apply", "-a", help="Apply site restore workflow."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    app_ctx.emit_output(
+        "ok",
+        f"Site restore plan prepared for {domain}",
+        domain=domain,
+        checkpoint_file=str(checkpoint_file),
+        restore_runtime=restore_runtime,
+        restore_secrets=restore_secrets,
+        force=force,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock(_delete_lock_name(domain)):
+            result = restore_site_checkpoint(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                state_path=Path(app_ctx.config.state_path),
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                service_user=app_ctx.config.systemd.user,
+                domain=domain,
+                checkpoint_file=checkpoint_file,
+                force=force,
+                restore_runtime=restore_runtime,
+                restore_secrets=restore_secrets,
+            )
+    except CommandLockError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=5) from exc
+    except (SiteDeleteError, RuntimeProcessError) as exc:
+        _emit(
+            app_ctx,
+            severity="error",
+            event_type="site.restore.failed",
+            domain=domain,
+            message="Site restore failed.",
+            metadata={"error": str(exc), "checkpoint_file": str(checkpoint_file)},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    _emit(
+        app_ctx,
+        severity="info",
+        event_type="site.restore.completed",
+        domain=domain,
+        message="Site restore completed.",
+        metadata={"checkpoint_file": str(checkpoint_file)},
+    )
+    app_ctx.emit_output("ok", f"Site restored for {domain}", domain=domain, result=result)

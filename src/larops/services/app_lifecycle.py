@@ -59,7 +59,7 @@ def next_release_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
 
 
-def deploy_release(paths: AppPaths, source_path: Path, ref: str) -> str:
+def copy_release(paths: AppPaths, source_path: Path, ref: str) -> tuple[str, Path]:
     if not source_path.exists() or not source_path.is_dir():
         raise AppLifecycleError(f"Source path does not exist or is not a directory: {source_path}")
 
@@ -87,7 +87,18 @@ def deploy_release(paths: AppPaths, source_path: Path, ref: str) -> str:
         json.dumps(marker, indent=2),
         encoding="utf-8",
     )
+    return release_id, release_dir
+
+
+def activate_release(paths: AppPaths, release_dir: Path) -> None:
+    if not release_dir.exists():
+        raise AppLifecycleError(f"Release directory is missing: {release_dir}")
     switch_current_symlink(paths.current, release_dir)
+
+
+def deploy_release(paths: AppPaths, source_path: Path, ref: str) -> str:
+    release_id, release_dir = copy_release(paths, source_path, ref)
+    activate_release(paths, release_dir)
     return release_id
 
 
@@ -161,4 +172,3 @@ def prune_releases(paths: AppPaths, keep_releases: int) -> list[str]:
         shutil.rmtree(target, ignore_errors=True)
         deleted.append(release_id)
     return deleted
-

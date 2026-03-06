@@ -10,6 +10,7 @@ from larops.core.locks import CommandLock, CommandLockError
 from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.runtime_process import (
+    reconcile_process,
     RuntimeProcessError,
     disable_process,
     enable_process,
@@ -203,6 +204,42 @@ def restart(
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
     app_ctx.emit_output("ok", f"Worker restarted for {domain}", spec=spec)
+
+
+@worker_app.command("reconcile")
+def reconcile(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    apply: bool = typer.Option(False, "--apply", help="Apply runtime reconcile."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    app_ctx.emit_output(
+        "ok",
+        f"Worker reconcile plan prepared for {domain}",
+        domain=domain,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+    try:
+        with CommandLock(_lock_name(domain)):
+            result = reconcile_process(
+                state_path=Path(app_ctx.config.state_path),
+                unit_dir=Path(app_ctx.config.systemd.unit_dir),
+                systemd_manage=app_ctx.config.systemd.manage,
+                domain=domain,
+                process_type="worker",
+                policy=_policy_for(app_ctx),
+            )
+    except CommandLockError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=5) from exc
+    except RuntimeProcessError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+    app_ctx.emit_output("ok", f"Worker reconciled for {domain}", result=result)
 
 
 @worker_app.command("status")

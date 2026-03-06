@@ -9,6 +9,10 @@ LAROPS_RELEASE_BASE_URL="${LAROPS_RELEASE_BASE_URL:-https://github.com/thanhtung
 LAROPS_ALLOW_UNPINNED="${LAROPS_ALLOW_UNPINNED:-false}"
 LAROPS_SKIP_CHECKSUM="${LAROPS_SKIP_CHECKSUM:-false}"
 
+INSTALL_STAGING_DIR="${LAROPS_INSTALL_DIR}.new.$$"
+INSTALL_BACKUP_DIR="${LAROPS_INSTALL_DIR}.bak.$$"
+INSTALL_SUCCEEDED=false
+
 is_true() {
   local raw
   raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
@@ -36,8 +40,25 @@ assert_safe_install_dir() {
   esac
 }
 
-install_from_release_asset() {
+cleanup_on_exit() {
+  if [[ "${INSTALL_SUCCEEDED}" == "true" ]]; then
+    return 0
+  fi
+  rm -rf "${INSTALL_STAGING_DIR}"
+  if [[ -d "${INSTALL_BACKUP_DIR}" && ! -e "${LAROPS_INSTALL_DIR}" ]]; then
+    mv "${INSTALL_BACKUP_DIR}" "${LAROPS_INSTALL_DIR}"
+  fi
+}
+
+prepare_dir() {
+  local target_dir="$1"
+  rm -rf "${target_dir}"
+  mkdir -p "${target_dir}"
+}
+
+stage_from_release_asset() {
   local tag="$1"
+  local target_dir="$2"
   local tmp_dir archive_name archive_path checksum_path archive_url checksum_url expected actual
 
   tmp_dir="$(mktemp -d)"
@@ -69,12 +90,52 @@ install_from_release_asset() {
     fi
   fi
 
-  assert_safe_install_dir
-  rm -rf "${LAROPS_INSTALL_DIR}"
-  mkdir -p "${LAROPS_INSTALL_DIR}"
-  tar -xzf "${archive_path}" -C "${LAROPS_INSTALL_DIR}" --strip-components=1
+  prepare_dir "${target_dir}"
+  tar -xzf "${archive_path}" -C "${target_dir}" --strip-components=1
   rm -rf "${tmp_dir}"
 }
+
+stage_from_latest() {
+  local target_dir="$1"
+
+  prepare_dir "${target_dir}"
+  echo "[larops-install] Cloning source from ${LAROPS_REPO_URL}..."
+  git clone "${LAROPS_REPO_URL}" "${target_dir}"
+  echo "[larops-install] Using latest main branch..."
+  git -C "${target_dir}" checkout main
+  git -C "${target_dir}" pull --ff-only
+}
+
+setup_virtualenv() {
+  local target_dir="$1"
+
+  echo "[larops-install] Setting up Python virtual environment..."
+  python3 -m venv "${target_dir}/.venv"
+  "${target_dir}/.venv/bin/pip" install --upgrade pip
+  "${target_dir}/.venv/bin/pip" install -e "${target_dir}"
+}
+
+activate_install() {
+  local staged_dir="$1"
+
+  if [[ -e "${LAROPS_INSTALL_DIR}" ]]; then
+    mv "${LAROPS_INSTALL_DIR}" "${INSTALL_BACKUP_DIR}"
+  fi
+
+  mv "${staged_dir}" "${LAROPS_INSTALL_DIR}"
+  ln -sf "${LAROPS_INSTALL_DIR}/.venv/bin/larops" /usr/local/bin/larops
+
+  if [[ ! -f "${LAROPS_CONFIG_PATH}" ]]; then
+    echo "[larops-install] Writing default config to ${LAROPS_CONFIG_PATH}..."
+    mkdir -p "$(dirname "${LAROPS_CONFIG_PATH}")"
+    cp "${LAROPS_INSTALL_DIR}/config/larops.example.yaml" "${LAROPS_CONFIG_PATH}"
+  fi
+
+  rm -rf "${INSTALL_BACKUP_DIR}"
+  INSTALL_SUCCEEDED=true
+}
+
+trap cleanup_on_exit EXIT
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "[larops-install] Please run as root."
@@ -90,42 +151,23 @@ if [[ "${LAROPS_VERSION}" == "latest" || "${LAROPS_VERSION}" == "main" ]]; then
   fi
 fi
 
+assert_safe_install_dir
+
 echo "[larops-install] Installing base dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y git curl ca-certificates python3 python3-venv python3-pip tar
 
 if [[ "${LAROPS_VERSION}" == "latest" || "${LAROPS_VERSION}" == "main" ]]; then
-  if [[ -d "${LAROPS_INSTALL_DIR}/.git" ]]; then
-    echo "[larops-install] Existing install found, pulling latest source..."
-    git -C "${LAROPS_INSTALL_DIR}" fetch --all --prune
-  else
-    assert_safe_install_dir
-    echo "[larops-install] Cloning source from ${LAROPS_REPO_URL}..."
-    rm -rf "${LAROPS_INSTALL_DIR}"
-    git clone "${LAROPS_REPO_URL}" "${LAROPS_INSTALL_DIR}"
-  fi
-  echo "[larops-install] Using latest main branch..."
-  git -C "${LAROPS_INSTALL_DIR}" checkout main
-  git -C "${LAROPS_INSTALL_DIR}" pull --ff-only
+  stage_from_latest "${INSTALL_STAGING_DIR}"
 else
   tag="$(normalize_tag "${LAROPS_VERSION}")"
   echo "[larops-install] Using pinned version ${tag}..."
-  install_from_release_asset "${tag}"
+  stage_from_release_asset "${tag}" "${INSTALL_STAGING_DIR}"
 fi
 
-echo "[larops-install] Setting up Python virtual environment..."
-python3 -m venv "${LAROPS_INSTALL_DIR}/.venv"
-"${LAROPS_INSTALL_DIR}/.venv/bin/pip" install --upgrade pip
-"${LAROPS_INSTALL_DIR}/.venv/bin/pip" install -e "${LAROPS_INSTALL_DIR}"
-
-ln -sf "${LAROPS_INSTALL_DIR}/.venv/bin/larops" /usr/local/bin/larops
-
-if [[ ! -f "${LAROPS_CONFIG_PATH}" ]]; then
-  echo "[larops-install] Writing default config to ${LAROPS_CONFIG_PATH}..."
-  mkdir -p "$(dirname "${LAROPS_CONFIG_PATH}")"
-  cp "${LAROPS_INSTALL_DIR}/config/larops.example.yaml" "${LAROPS_CONFIG_PATH}"
-fi
+setup_virtualenv "${INSTALL_STAGING_DIR}"
+activate_install "${INSTALL_STAGING_DIR}"
 
 echo "[larops-install] Done."
 echo "[larops-install] Next step (WordOps-style full bootstrap):"

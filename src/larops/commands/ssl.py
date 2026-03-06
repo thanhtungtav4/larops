@@ -169,6 +169,7 @@ def issue(
     email: str | None = typer.Option(None, "--email", help="Email used for certificate registration."),
     challenge: str = typer.Option("http", "--challenge", help="Challenge type: http or dns."),
     dns_provider: str | None = typer.Option(None, "--dns-provider", help="DNS provider short name for certbot."),
+    webroot_path: str | None = typer.Option(None, "--webroot-path", help="HTTP challenge webroot path."),
     staging: bool = typer.Option(False, "--staging", help="Use Let's Encrypt staging."),
     apply: bool = typer.Option(False, "--apply", help="Apply certificate issuance."),
 ) -> None:
@@ -180,6 +181,7 @@ def issue(
             challenge=challenge,
             dns_provider=dns_provider,
             staging=staging,
+            webroot_path=webroot_path,
         )
     except SslServiceError as exc:
         app_ctx.emit_output("error", str(exc))

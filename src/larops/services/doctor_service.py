@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import shutil
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
 
+from larops.core.shell import run_command
 from larops.services.app_lifecycle import get_app_paths
+from larops.services.db_service import manifest_path
+from larops.services.db_systemd import db_backup_service_name, db_backup_timer_name
 
 
 @dataclass(slots=True)
@@ -40,10 +44,54 @@ def _check_path_writable(path: Path) -> DoctorCheck:
         return DoctorCheck(name=f"path:{path}", status="error", detail=str(exc))
 
 
-def run_host_checks(*, state_path: Path, events_path: Path, quick: bool) -> list[DoctorCheck]:
+def _check_file_presence(path: Path, *, label: str, missing_status: str = "warn") -> DoctorCheck:
+    if path.exists():
+        return DoctorCheck(name=label, status="ok", detail=str(path))
+    return DoctorCheck(name=label, status=missing_status, detail=f"missing: {path}")
+
+
+def _check_systemd_unit(unit: str) -> DoctorCheck:
+    try:
+        active = run_command(["systemctl", "is-active", unit], check=False)
+        enabled = run_command(["systemctl", "is-enabled", unit], check=False)
+    except FileNotFoundError:
+        return DoctorCheck(name=f"systemd:{unit}", status="warn", detail="systemctl unavailable")
+    active_raw = (active.stdout or active.stderr or "").strip()
+    enabled_raw = (enabled.stdout or enabled.stderr or "").strip()
+    if active_raw == "active" and enabled_raw == "enabled":
+        status = "ok"
+    elif active_raw in {"active", "activating"} or enabled_raw == "enabled":
+        status = "warn"
+    else:
+        status = "warn"
+    return DoctorCheck(name=f"systemd:{unit}", status=status, detail=f"active={active_raw}, enabled={enabled_raw}")
+
+
+def _check_latest_backup(state_path: Path, domain: str) -> DoctorCheck:
+    backup_dir = state_path / "backups" / domain
+    backups = sorted([item for item in backup_dir.glob("*.sql.gz") if item.is_file()])
+    if not backups:
+        return DoctorCheck(name=f"backup:{domain}", status="warn", detail=f"no backups in {backup_dir}")
+    latest = backups[-1]
+    age_hours = (datetime.now(UTC).timestamp() - latest.stat().st_mtime) / 3600
+    manifest = manifest_path(latest)
+    status = "ok" if age_hours <= 24 else "warn" if age_hours <= 72 else "error"
+    if not manifest.exists() and status == "ok":
+        status = "warn"
+    detail = f"{latest.name} age={int(age_hours)}h"
+    if manifest.exists():
+        detail += f", manifest={manifest.name}"
+    else:
+        detail += ", manifest=missing"
+    return DoctorCheck(name=f"backup:{domain}", status=status, detail=detail)
+
+
+def run_host_checks(*, state_path: Path, events_path: Path, quick: bool, unit_dir: Path, systemd_manage: bool) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = [
         _check_path_writable(state_path),
         _check_path_writable(events_path.parent),
+        _check_file_presence(events_path, label=f"events:{events_path}", missing_status="warn"),
+        _check_file_presence(state_path / "security" / "fim_baseline.json", label="security:fim-baseline", missing_status="warn"),
         _check_disk(),
     ]
     command_set = ["python3", "bash", "openssl"]
@@ -51,10 +99,25 @@ def run_host_checks(*, state_path: Path, events_path: Path, quick: bool) -> list
         command_set += ["nginx", "php", "mysqldump", "certbot"]
     for command in command_set:
         checks.append(_check_command(command))
+    if systemd_manage and not quick:
+        for unit in (
+            "larops-notify-telegram.service",
+            "larops-ssl-renew.timer",
+            "larops-monitor-scan.timer",
+            "larops-monitor-fim.timer",
+        ):
+            checks.append(_check_systemd_unit(unit))
     return checks
 
 
-def run_app_checks(*, base_releases_path: Path, state_path: Path, domain: str) -> list[DoctorCheck]:
+def run_app_checks(
+    *,
+    base_releases_path: Path,
+    state_path: Path,
+    domain: str,
+    unit_dir: Path,
+    systemd_manage: bool,
+) -> list[DoctorCheck]:
     paths = get_app_paths(base_releases_path, state_path, domain)
     checks = []
     checks.append(
@@ -78,6 +141,29 @@ def run_app_checks(*, base_releases_path: Path, state_path: Path, domain: str) -
             detail=str(paths.releases),
         )
     )
+    checks.append(_check_latest_backup(state_path, domain))
+    timer_unit_path = unit_dir / db_backup_timer_name(domain)
+    service_unit_path = unit_dir / db_backup_service_name(domain)
+    if service_unit_path.exists() or timer_unit_path.exists():
+        if systemd_manage:
+            checks.append(_check_systemd_unit(db_backup_service_name(domain)))
+            checks.append(_check_systemd_unit(db_backup_timer_name(domain)))
+        else:
+            checks.append(
+                DoctorCheck(
+                    name=f"backup-timer:{domain}",
+                    status="warn",
+                    detail="unit exists but systemd management is disabled",
+                )
+            )
+    else:
+        checks.append(
+            DoctorCheck(
+                name=f"backup-timer:{domain}",
+                status="warn",
+                detail="auto backup timer not configured",
+            )
+        )
     return checks
 
 
@@ -97,4 +183,3 @@ def summarize(checks: list[DoctorCheck]) -> dict:
             "error": len([check for check in checks if check.status == "error"]),
         },
     }
-
