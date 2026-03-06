@@ -20,6 +20,7 @@ from larops.services.db_service import manifest_path, restore_verify_report_path
 from larops.services.db_systemd import db_backup_service_name, db_backup_timer_name
 from larops.services.db_offsite_service import DbOffsiteError, offsite_status
 from larops.services.monitor_systemd import monitor_service_watch_timer_name
+from larops.services.observability_logs_service import observability_logs_service_name
 from larops.services.runtime_process import status_process
 
 
@@ -309,13 +310,17 @@ def run_host_checks(*, state_path: Path, events_path: Path, quick: bool, unit_di
     for command in command_set:
         checks.append(_check_command(command))
     if systemd_manage and not quick:
-        for unit in (
+        units: list[str] = [
             "larops-notify-telegram.service",
             "larops-ssl-renew.timer",
             "larops-monitor-scan.timer",
             "larops-monitor-fim.timer",
             monitor_service_watch_timer_name(),
-        ):
+        ]
+        observability_unit = unit_dir / observability_logs_service_name()
+        if observability_unit.exists():
+            units.append(observability_logs_service_name())
+        for unit in units:
             checks.append(_check_systemd_unit(unit))
     return checks
 

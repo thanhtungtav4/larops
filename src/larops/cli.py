@@ -12,6 +12,7 @@ from larops.commands.doctor import doctor_app
 from larops.commands.horizon import horizon_app
 from larops.commands.monitor import monitor_app
 from larops.commands.notify import notify_app
+from larops.commands.observability import observability_app
 from larops.commands.scheduler import scheduler_app
 from larops.commands.security import security_app
 from larops.commands.site import site_app
@@ -78,6 +79,7 @@ app.add_typer(horizon_app, name="horizon")
 app.add_typer(ssl_app, name="ssl")
 app.add_typer(db_app, name="db")
 app.add_typer(notify_app, name="notify")
+app.add_typer(observability_app, name="observability")
 app.add_typer(doctor_app, name="doctor")
 app.add_typer(security_app, name="security")
 app.add_typer(alert_app, name="alert")

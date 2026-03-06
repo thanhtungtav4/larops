@@ -268,6 +268,36 @@ def test_run_host_checks_includes_service_watchdog_timer(monkeypatch, tmp_path: 
     assert "systemd:larops-monitor-service.timer" in names
 
 
+def test_run_host_checks_includes_observability_logs_service_when_unit_exists(monkeypatch, tmp_path: Path) -> None:
+    unit_path = tmp_path / "units" / "larops-observability-logs.service"
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_path.write_text("[Unit]\nDescription=test\n", encoding="utf-8")
+
+    def fake_run_command(
+        command: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: int | None = None,
+    ) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"]:
+            return CompletedProcess(command, 0, stdout="active\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.doctor_service.run_command", fake_run_command)
+
+    checks = run_host_checks(
+        state_path=tmp_path / "state",
+        events_path=tmp_path / "events.jsonl",
+        quick=False,
+        unit_dir=tmp_path / "units",
+        systemd_manage=True,
+    )
+    names = {check.name for check in checks}
+    assert "systemd:larops-observability-logs.service" in names
+
+
 def test_run_host_checks_marks_failed_timers_as_error(monkeypatch, tmp_path: Path) -> None:
     def fake_run_command(
         command: list[str],
@@ -410,3 +440,156 @@ def test_doctor_fleet_include_checks_and_skip_host(tmp_path: Path, monkeypatch) 
     assert report["target_count"] == 1
     assert report["targets"][0]["target"] == "alpha.test"
     assert report["targets"][0]["checks"][0]["name"] == "app:alpha.test:metadata"
+
+
+def test_doctor_metrics_run_prints_prometheus_text(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    monkeypatch.setattr(
+        "larops.commands.doctor._fleet_report",
+        lambda _app_ctx, quick, include_host: {
+            "overall": "warn",
+            "registered_apps": ["alpha.test"],
+            "target_count": 2,
+            "counts": {"ok": 0, "warn": 1, "error": 1},
+            "targets": [
+                {
+                    "target": "host",
+                    "overall": "ok",
+                    "counts": {"ok": 3, "warn": 0, "error": 0},
+                    "checks": [{"name": "disk:/", "status": "ok", "detail": "50% used"}],
+                },
+                {
+                    "target": "alpha.test",
+                    "overall": "warn",
+                    "counts": {"ok": 2, "warn": 1, "error": 0},
+                    "checks": [{"name": "backup-verify:alpha.test", "status": "warn", "detail": "age=200h"}],
+                },
+            ],
+        },
+    )
+
+    result = runner.invoke(app, ["--config", str(config), "doctor", "metrics", "run", "--include-checks"])
+    assert result.exit_code == 0
+    assert '# HELP larops_fleet_status Overall LarOps fleet status code (0=ok,1=warn,2=error).' in result.stdout
+    assert 'larops_target_status{target="alpha.test"} 1' in result.stdout
+    assert 'larops_check_status{check="backup-verify:alpha.test",target="alpha.test"} 1' in result.stdout
+
+
+def test_doctor_metrics_run_writes_output_file(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    output_file = tmp_path / "metrics" / "larops.prom"
+
+    monkeypatch.setattr(
+        "larops.commands.doctor._fleet_report",
+        lambda _app_ctx, quick, include_host: {
+            "overall": "ok",
+            "registered_apps": [],
+            "target_count": 1,
+            "counts": {"ok": 1, "warn": 0, "error": 0},
+            "targets": [
+                {
+                    "target": "host",
+                    "overall": "ok",
+                    "counts": {"ok": 3, "warn": 0, "error": 0},
+                    "checks": [{"name": "disk:/", "status": "ok", "detail": "50% used"}],
+                }
+            ],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "doctor",
+            "metrics",
+            "run",
+            "--output-file",
+            str(output_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert output_file.exists()
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["output_file"] == str(output_file)
+    assert 'larops_target_status{target="host"} 0' in output_file.read_text(encoding="utf-8")
+
+
+def test_doctor_metrics_timer_enable_status_disable(tmp_path: Path) -> None:
+    config = tmp_path / "larops.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 5",
+                "  health_check_path: /up",
+                "systemd:",
+                "  manage: false",
+                f"  unit_dir: {tmp_path / 'units'}",
+                "  user: root",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output_file = tmp_path / "metrics" / "larops.prom"
+
+    enable = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "doctor",
+            "metrics",
+            "timer",
+            "enable",
+            "--output-file",
+            str(output_file),
+            "--include-checks",
+            "--apply",
+        ],
+    )
+    assert enable.exit_code == 0
+    service = tmp_path / "units" / "larops-doctor-metrics.service"
+    timer = tmp_path / "units" / "larops-doctor-metrics.timer"
+    assert service.exists()
+    assert timer.exists()
+    service_body = service.read_text(encoding="utf-8")
+    assert "doctor metrics run" in service_body
+    assert f"--output-file {output_file}" in service_body
+    assert "--include-checks" in service_body
+
+    status = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "doctor", "metrics", "timer", "status"],
+    )
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout.strip())
+    assert payload["metrics_timer"]["service_unit_exists"] is True
+    assert payload["metrics_timer"]["timer_unit_exists"] is True
+
+    disable = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "doctor",
+            "metrics",
+            "timer",
+            "disable",
+            "--remove-units",
+            "--apply",
+        ],
+    )
+    assert disable.exit_code == 0
+    assert not service.exists()
+    assert not timer.exists()

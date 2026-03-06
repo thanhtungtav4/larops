@@ -339,6 +339,18 @@ sudo larops --config /etc/larops/larops.yaml doctor quick host
 sudo larops --config /etc/larops/larops.yaml doctor run example.com
 sudo larops --config /etc/larops/larops.yaml doctor fleet
 sudo larops --config /etc/larops/larops.yaml doctor fleet --quick --include-checks
+sudo larops --config /etc/larops/larops.yaml doctor metrics run
+sudo larops --config /etc/larops/larops.yaml doctor metrics run \
+  --output-file /var/lib/node_exporter/textfile_collector/larops.prom \
+  --apply
+sudo larops --config /etc/larops/larops.yaml doctor metrics timer enable \
+  --output-file /var/lib/node_exporter/textfile_collector/larops.prom \
+  --apply
+sudo larops --config /etc/larops/larops.yaml observability logs enable \
+  --sink vector \
+  --vector-address 10.0.0.10:6000 \
+  --apply
+sudo larops --config /etc/larops/larops.yaml observability logs status
 sudo larops --config /etc/larops/larops.yaml worker reconcile example.com --apply
 sudo larops --config /etc/larops/larops.yaml scheduler reconcile example.com --apply
 ```
