@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import json
 import shutil
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from larops.config import DeployConfig
 from larops.core.shell import ShellCommandError, run_command
 from larops.services.app_lifecycle import AppLifecycleError, AppPaths, activate_release, copy_release
 
 
 class ReleaseServiceError(RuntimeError):
     pass
+
+
+_RELEASE_MANIFEST = ".larops-deploy-manifest.json"
 
 
 def _remove_path(path: Path) -> None:
@@ -70,7 +76,62 @@ def prepare_release_candidate(
     return release_id, release_dir
 
 
-def run_release_commands(*, workdir: Path, commands: list[str]) -> list[dict[str, Any]]:
+def _normalized_timeout(timeout_seconds: int | None) -> int | None:
+    if timeout_seconds is None:
+        return None
+    return timeout_seconds if timeout_seconds > 0 else None
+
+
+def _composer_install_command(config: DeployConfig) -> str:
+    flags = ["install"]
+    if config.composer_no_dev:
+        flags.append("--no-dev")
+    if config.composer_optimize_autoloader:
+        flags.append("--optimize-autoloader")
+    return " ".join([config.composer_binary, *flags])
+
+
+def build_deploy_phase_commands(config: DeployConfig) -> dict[str, list[str]]:
+    build_commands: list[str] = []
+    if config.composer_install:
+        build_commands.append(_composer_install_command(config))
+    build_commands.extend([command.strip() for command in config.asset_commands if command.strip()])
+
+    pre_activate_commands = [command.strip() for command in config.pre_activate_commands if command.strip()]
+    if config.migrate_enabled and config.migrate_phase.strip().lower() == "pre-activate":
+        pre_activate_commands.append(config.migrate_command.strip())
+
+    post_activate_commands = [command.strip() for command in config.post_activate_commands if command.strip()]
+    if config.migrate_enabled and config.migrate_phase.strip().lower() == "post-activate":
+        post_activate_commands.append(config.migrate_command.strip())
+    if config.cache_warm_enabled:
+        post_activate_commands.extend([command.strip() for command in config.cache_warm_commands if command.strip()])
+
+    return {
+        "build": build_commands,
+        "pre_activate": pre_activate_commands,
+        "post_activate": post_activate_commands,
+        "verify": [command.strip() for command in config.verify_commands if command.strip()],
+    }
+
+
+def build_rollback_phase_commands(config: DeployConfig) -> dict[str, list[str]]:
+    post_activate_commands = [command.strip() for command in config.post_activate_commands if command.strip()]
+    if config.cache_warm_enabled:
+        post_activate_commands.extend([command.strip() for command in config.cache_warm_commands if command.strip()])
+    return {
+        "post_activate": post_activate_commands,
+        "verify": [command.strip() for command in config.verify_commands if command.strip()],
+    }
+
+
+def run_release_commands(
+    *,
+    workdir: Path,
+    phase: str,
+    commands: list[str],
+    timeout_seconds: int | None,
+) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     for command in commands:
         raw = command.strip()
@@ -78,17 +139,34 @@ def run_release_commands(*, workdir: Path, commands: list[str]) -> list[dict[str
             continue
         script = f'cd "{str(workdir)}" && {raw}'
         try:
-            completed = run_command(["bash", "-lc", script], check=True)
+            started_at = datetime.now(UTC)
+            completed = run_command(
+                ["bash", "-lc", script],
+                check=True,
+                timeout_seconds=_normalized_timeout(timeout_seconds),
+            )
         except ShellCommandError as exc:
-            raise ReleaseServiceError(str(exc)) from exc
+            raise ReleaseServiceError(f"Release phase '{phase}' failed for command '{raw}': {exc}") from exc
         reports.append(
             {
+                "phase": phase,
                 "command": raw,
+                "started_at": started_at.isoformat(),
                 "stdout": (completed.stdout or "").strip(),
                 "stderr": (completed.stderr or "").strip(),
             }
         )
     return reports
+
+
+def release_manifest_path(release_dir: Path) -> Path:
+    return release_dir / _RELEASE_MANIFEST
+
+
+def write_release_manifest(release_dir: Path, payload: dict[str, Any]) -> Path:
+    path = release_manifest_path(release_dir)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
 
 
 def activate_release_candidate(*, paths: AppPaths, release_dir: Path) -> None:

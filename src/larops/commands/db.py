@@ -24,9 +24,12 @@ from larops.services.db_service import (
     normalize_db_engine,
     prune_backups,
     read_backup_manifest,
+    restore_verify_backup,
+    restore_verify_report_path,
     run_backup,
     run_restore,
     verify_backup,
+    write_restore_verify_report,
     write_backup_manifest,
     write_mysql_credentials,
     write_postgres_credentials,
@@ -393,6 +396,87 @@ def verify(
         app_ctx.emit_output("error", "DB backup verification failed.", verification=result)
         raise typer.Exit(code=2)
     app_ctx.emit_output(result["status"], "DB backup verification completed.", verification=result)
+
+
+@db_app.command("restore-verify")
+def restore_verify(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
+    backup_file: Path = typer.Option(..., "--backup-file", help="Backup file path.", dir_okay=False),
+    database: str = typer.Option(..., "--database", help="Source database name."),
+    verify_database: str | None = typer.Option(
+        None,
+        "--verify-database",
+        help="Temporary database name override used for restore verification.",
+    ),
+    credential_file: Path | None = typer.Option(
+        None,
+        "--credential-file",
+        help="Credential file path.",
+        dir_okay=False,
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply restore verification."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        normalized_engine = normalize_db_engine(engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    secret_file = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
+    report_file = restore_verify_report_path(Path(app_ctx.config.state_path), domain)
+    app_ctx.emit_output(
+        "ok",
+        f"DB restore-verify plan prepared for {domain}",
+        domain=domain,
+        engine=normalized_engine,
+        backup_file=str(backup_file),
+        credential_file=str(secret_file),
+        database=database,
+        verify_database=verify_database,
+        report_file=str(report_file),
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    try:
+        with CommandLock("db-restore-verify"):
+            result = restore_verify_backup(
+                backup_file=backup_file,
+                database=database,
+                credential_file=secret_file,
+                engine=normalized_engine,
+                verify_database=verify_database,
+            )
+            report = write_restore_verify_report(
+                state_path=Path(app_ctx.config.state_path),
+                domain=domain,
+                payload=result,
+            )
+    except (CommandLockError, DbServiceError, ShellCommandError) as exc:
+        _emit(
+            app_ctx,
+            "error",
+            "db.restore_verify.failed",
+            "DB restore verify failed.",
+            {"error": str(exc), "domain": domain},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(
+        app_ctx,
+        "info",
+        "db.restore_verify.completed",
+        "DB restore verify completed.",
+        {"domain": domain, "backup_file": str(backup_file), "report_file": str(report)},
+    )
+    app_ctx.emit_output("ok", f"DB restore verify completed for {domain}", verification=result, report_file=str(report))
 
 
 @db_app.command("list-backups")

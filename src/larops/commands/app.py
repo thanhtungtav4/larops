@@ -25,11 +25,14 @@ from larops.services.app_lifecycle import (
 )
 from larops.services.release_service import (
     ReleaseServiceError,
+    build_deploy_phase_commands,
+    build_rollback_phase_commands,
     prepare_release_candidate,
     refresh_runtime_after_activate,
     remove_release_dir,
     run_http_health_check,
     run_release_commands,
+    write_release_manifest,
 )
 
 app_cmd = typer.Typer(help="Manage Laravel application lifecycle.")
@@ -193,10 +196,13 @@ def deploy(
         app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
         return
 
+    release_id: str | None = None
+    release_dir: Path | None = None
     try:
         with CommandLock(_lock_name(domain)):
             metadata = load_metadata(paths.metadata)
             previous_release = get_current_release(paths)
+            phase_commands = build_deploy_phase_commands(app_ctx.config.deploy)
             release_id, release_dir = prepare_release_candidate(
                 paths=paths,
                 source_path=source_path,
@@ -204,15 +210,25 @@ def deploy(
                 shared_dirs=app_ctx.config.deploy.shared_dirs,
                 shared_files=app_ctx.config.deploy.shared_files,
             )
+            build_reports = run_release_commands(
+                workdir=release_dir,
+                phase="build",
+                commands=phase_commands["build"],
+                timeout_seconds=app_ctx.config.deploy.build_timeout_seconds,
+            )
             pre_activate_reports = run_release_commands(
                 workdir=release_dir,
-                commands=list(app_ctx.config.deploy.pre_activate_commands),
+                phase="pre-activate",
+                commands=phase_commands["pre_activate"],
+                timeout_seconds=app_ctx.config.deploy.pre_activate_timeout_seconds,
             )
             activate_release(paths, release_dir)
             current_path = paths.current.resolve(strict=True)
             post_activate_reports = run_release_commands(
                 workdir=current_path,
-                commands=list(app_ctx.config.deploy.post_activate_commands),
+                phase="post-activate",
+                commands=phase_commands["post_activate"],
+                timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
             )
             health_check = run_http_health_check(
                 domain=domain,
@@ -234,6 +250,26 @@ def deploy(
                         f"Deploy health check failed after activate and rollback was applied: {health_check.get('detail', 'unknown')}"
                     )
                 raise AppLifecycleError(f"Deploy health check failed: {health_check.get('detail', 'unknown')}")
+            verify_reports: list[dict] = []
+            verify_status = "skipped"
+            if phase_commands["verify"]:
+                try:
+                    verify_reports = run_release_commands(
+                        workdir=current_path,
+                        phase="verify",
+                        commands=phase_commands["verify"],
+                        timeout_seconds=app_ctx.config.deploy.verify_timeout_seconds,
+                    )
+                    verify_status = "passed"
+                except ReleaseServiceError as exc:
+                    verify_status = "failed"
+                    if app_ctx.config.deploy.rollback_on_verify_failure and previous_release:
+                        rollback_release(paths, previous_release)
+                        remove_release_dir(release_dir)
+                        raise AppLifecycleError(
+                            f"Deploy verify phase failed after activate and rollback was applied: {exc}"
+                        ) from exc
+                    raise
             runtime_refresh = refresh_runtime_after_activate(
                 state_path=Path(app_ctx.config.state_path),
                 current_path=current_path,
@@ -248,16 +284,49 @@ def deploy(
                 "ref": ref,
                 "deployed_at": datetime.now(UTC).isoformat(),
                 "source": str(source_path),
+                "build_reports": build_reports,
                 "pre_activate_reports": pre_activate_reports,
                 "post_activate_reports": post_activate_reports,
+                "verify_reports": verify_reports,
                 "health_check": health_check,
                 "runtime_refresh": runtime_refresh,
             }
             save_metadata(paths.metadata, metadata)
+            write_release_manifest(
+                release_dir,
+                {
+                    "status": "deployed",
+                    "release_id": release_id,
+                    "ref": ref,
+                    "source": str(source_path),
+                    "deployed_at": datetime.now(UTC).isoformat(),
+                    "phase_reports": {
+                        "build": build_reports,
+                        "pre_activate": pre_activate_reports,
+                        "post_activate": post_activate_reports,
+                        "verify": verify_reports,
+                    },
+                    "health_check": health_check,
+                    "verify_status": verify_status,
+                    "runtime_refresh": runtime_refresh,
+                },
+            )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
     except (AppLifecycleError, ReleaseServiceError) as exc:
+        if release_dir is not None and release_dir.exists():
+            write_release_manifest(
+                release_dir,
+                {
+                    "status": "failed",
+                    "release_id": release_id,
+                    "ref": ref,
+                    "source": str(source_path),
+                    "failed_at": datetime.now(UTC).isoformat(),
+                    "error": str(exc),
+                },
+            )
         _emit_event(
             app_ctx,
             severity="error",
@@ -336,11 +405,14 @@ def rollback(
     try:
         current_release_before = get_current_release(paths)
         with CommandLock(_lock_name(domain)):
+            rollback_phase_commands = build_rollback_phase_commands(app_ctx.config.deploy)
             rollback_release(paths, target)
             current_path = paths.current.resolve(strict=True)
             post_activate_reports = run_release_commands(
                 workdir=current_path,
-                commands=list(app_ctx.config.deploy.post_activate_commands),
+                phase="post-activate",
+                commands=rollback_phase_commands["post_activate"],
+                timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
             )
             health_check = run_http_health_check(
                 domain=domain,
@@ -361,6 +433,22 @@ def rollback(
                         f"Rollback health check failed and previous release was restored: {health_check.get('detail', 'unknown')}"
                     )
                 raise AppLifecycleError(f"Rollback health check failed: {health_check.get('detail', 'unknown')}")
+            verify_reports: list[dict] = []
+            if rollback_phase_commands["verify"]:
+                try:
+                    verify_reports = run_release_commands(
+                        workdir=current_path,
+                        phase="verify",
+                        commands=rollback_phase_commands["verify"],
+                        timeout_seconds=app_ctx.config.deploy.verify_timeout_seconds,
+                    )
+                except ReleaseServiceError as exc:
+                    if app_ctx.config.deploy.rollback_on_verify_failure and current_release_before:
+                        rollback_release(paths, current_release_before)
+                        raise AppLifecycleError(
+                            f"Rollback verify phase failed and previous release was restored: {exc}"
+                        ) from exc
+                    raise
             runtime_refresh = refresh_runtime_after_activate(
                 state_path=Path(app_ctx.config.state_path),
                 current_path=current_path,
@@ -373,10 +461,25 @@ def rollback(
                 "target": target,
                 "rolled_back_at": datetime.now(UTC).isoformat(),
                 "post_activate_reports": post_activate_reports,
+                "verify_reports": verify_reports,
                 "health_check": health_check,
                 "runtime_refresh": runtime_refresh,
             }
             save_metadata(paths.metadata, metadata)
+            write_release_manifest(
+                current_path,
+                {
+                    "status": "rolled-back-active",
+                    "release_id": target,
+                    "rolled_back_at": datetime.now(UTC).isoformat(),
+                    "phase_reports": {
+                        "post_activate": post_activate_reports,
+                        "verify": verify_reports,
+                    },
+                    "health_check": health_check,
+                    "runtime_refresh": runtime_refresh,
+                },
+            )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc

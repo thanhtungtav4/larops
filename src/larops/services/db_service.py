@@ -385,3 +385,146 @@ def verify_backup(
         "size_match": size_match,
         "gzip_check": gzip_status,
     }
+
+
+def restore_verify_report_path(state_path: Path, domain: str) -> Path:
+    return default_backup_dir(state_path, domain) / "last_restore_verify.json"
+
+
+def write_restore_verify_report(*, state_path: Path, domain: str, payload: dict) -> Path:
+    path = restore_verify_report_path(state_path, domain)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def _temporary_verify_database_name(database: str) -> str:
+    safe_database = _validate_database_name(database)
+    suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    candidate = f"{safe_database}_verify_{suffix}"
+    return candidate[:63]
+
+
+def _mysql_admin_command(*, credential_file: Path, sql: str) -> list[str]:
+    ensure_secure_credential_file(credential_file)
+    credential_file_q = shlex.quote(str(credential_file))
+    sql_q = shlex.quote(sql)
+    return ["bash", "-lc", f"set -euo pipefail; mysql --defaults-extra-file={credential_file_q} -e {sql_q}"]
+
+
+def _postgres_admin_command(*, credential_file: Path, database: str, sql: str) -> list[str]:
+    ensure_secure_credential_file(credential_file)
+    host, port, user = _read_postgres_connection_info(credential_file=credential_file, database=database)
+    credential_file_q = shlex.quote(str(credential_file))
+    host_q = shlex.quote(host)
+    port_q = shlex.quote(port)
+    user_q = shlex.quote(user)
+    sql_q = shlex.quote(sql)
+    return [
+        "bash",
+        "-lc",
+        (
+            "set -euo pipefail; "
+            f"PGPASSFILE={credential_file_q} psql --no-password --host={host_q} --port={port_q} "
+            f"--username={user_q} --dbname=postgres -c {sql_q}"
+        ),
+    ]
+
+
+def _postgres_scalar_query(*, credential_file: Path, database: str, sql: str) -> int:
+    ensure_secure_credential_file(credential_file)
+    host, port, user = _read_postgres_connection_info(credential_file=credential_file, database=database)
+    credential_file_q = shlex.quote(str(credential_file))
+    host_q = shlex.quote(host)
+    port_q = shlex.quote(port)
+    user_q = shlex.quote(user)
+    sql_q = shlex.quote(sql)
+    command = [
+        "bash",
+        "-lc",
+        (
+            "set -euo pipefail; "
+            f"PGPASSFILE={credential_file_q} psql --no-password --host={host_q} --port={port_q} "
+            f"--username={user_q} --dbname=postgres -Atc {sql_q}"
+        ),
+    ]
+    completed = run_command(command, check=True)
+    raw = (completed.stdout or "").strip()
+    return int(raw) if raw else 0
+
+
+def _mysql_scalar_query(*, credential_file: Path, sql: str) -> int:
+    command = _mysql_admin_command(credential_file=credential_file, sql=sql)
+    completed = run_command(command, check=True)
+    raw = (completed.stdout or "").strip()
+    return int(raw) if raw else 0
+
+
+def restore_verify_backup(
+    *,
+    backup_file: Path,
+    database: str,
+    credential_file: Path,
+    engine: str = "mysql",
+    verify_database: str | None = None,
+) -> dict:
+    normalized_engine = normalize_db_engine(engine)
+    temp_database = _validate_database_name(verify_database or _temporary_verify_database_name(database))
+    restore_command = build_restore_command(
+        backup_file=backup_file,
+        database=temp_database,
+        credential_file=credential_file,
+        engine=normalized_engine,
+    )
+
+    if normalized_engine == "mysql":
+        create_command = _mysql_admin_command(credential_file=credential_file, sql=f"CREATE DATABASE `{temp_database}`;")
+        drop_command = _mysql_admin_command(
+            credential_file=credential_file,
+            sql=f"DROP DATABASE IF EXISTS `{temp_database}`;",
+        )
+        count_sql = (
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_schema = '{temp_database}';"
+        )
+    else:
+        create_command = _postgres_admin_command(
+            credential_file=credential_file,
+            database=database,
+            sql=f'CREATE DATABASE "{temp_database}";',
+        )
+        drop_command = _postgres_admin_command(
+            credential_file=credential_file,
+            database=database,
+            sql=f'DROP DATABASE IF EXISTS "{temp_database}";',
+        )
+        count_sql = (
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_catalog = '{temp_database}' "
+            "AND table_schema NOT IN ('pg_catalog', 'information_schema');"
+        )
+
+    created = False
+    try:
+        run_command(create_command, check=True)
+        created = True
+        run_restore(restore_command)
+        if normalized_engine == "mysql":
+            table_count = _mysql_scalar_query(credential_file=credential_file, sql=count_sql)
+        else:
+            table_count = _postgres_scalar_query(credential_file=credential_file, database=database, sql=count_sql)
+    except ShellCommandError as exc:
+        raise DbServiceError(str(exc)) from exc
+    finally:
+        if created:
+            run_command(drop_command, check=False)
+
+    return {
+        "status": "ok",
+        "engine": normalized_engine,
+        "backup_file": str(backup_file),
+        "verify_database": temp_database,
+        "table_count": table_count,
+        "verified_at": datetime.now(UTC).isoformat(),
+    }

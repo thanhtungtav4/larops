@@ -21,10 +21,12 @@ from larops.services.app_lifecycle import (
     save_metadata,
 )
 from larops.services.release_service import (
+    build_deploy_phase_commands,
     ReleaseServiceError,
     prepare_release_candidate,
     run_http_health_check,
     run_release_commands,
+    write_release_manifest,
 )
 from larops.services.stack_service import apply_stack_plan, build_stack_plan, resolve_groups
 
@@ -39,6 +41,9 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
             "releases_path": app_ctx.config.deploy.releases_path,
             "source_base_path": app_ctx.config.deploy.source_base_path,
             "keep_releases": app_ctx.config.deploy.keep_releases,
+            "build_timeout_seconds": app_ctx.config.deploy.build_timeout_seconds,
+            "pre_activate_timeout_seconds": app_ctx.config.deploy.pre_activate_timeout_seconds,
+            "post_activate_timeout_seconds": app_ctx.config.deploy.post_activate_timeout_seconds,
             "health_check_path": app_ctx.config.deploy.health_check_path,
             "health_check_enabled": app_ctx.config.deploy.health_check_enabled,
             "health_check_scheme": app_ctx.config.deploy.health_check_scheme,
@@ -52,6 +57,19 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
             "runtime_refresh_strategy": app_ctx.config.deploy.runtime_refresh_strategy,
             "shared_dirs": list(app_ctx.config.deploy.shared_dirs),
             "shared_files": list(app_ctx.config.deploy.shared_files),
+            "composer_install": app_ctx.config.deploy.composer_install,
+            "composer_binary": app_ctx.config.deploy.composer_binary,
+            "composer_no_dev": app_ctx.config.deploy.composer_no_dev,
+            "composer_optimize_autoloader": app_ctx.config.deploy.composer_optimize_autoloader,
+            "asset_commands": list(app_ctx.config.deploy.asset_commands),
+            "migrate_enabled": app_ctx.config.deploy.migrate_enabled,
+            "migrate_phase": app_ctx.config.deploy.migrate_phase,
+            "migrate_command": app_ctx.config.deploy.migrate_command,
+            "cache_warm_enabled": app_ctx.config.deploy.cache_warm_enabled,
+            "cache_warm_commands": list(app_ctx.config.deploy.cache_warm_commands),
+            "verify_timeout_seconds": app_ctx.config.deploy.verify_timeout_seconds,
+            "verify_commands": list(app_ctx.config.deploy.verify_commands),
+            "rollback_on_verify_failure": app_ctx.config.deploy.rollback_on_verify_failure,
             "pre_activate_commands": list(app_ctx.config.deploy.pre_activate_commands),
             "post_activate_commands": list(app_ctx.config.deploy.post_activate_commands),
         },
@@ -74,6 +92,16 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
                 "min_severity": app_ctx.config.notifications.telegram.min_severity,
                 "batch_size": app_ctx.config.notifications.telegram.batch_size,
             }
+        },
+        "doctor": {
+            "app_command_checks": [
+                {
+                    "name": item.name,
+                    "command": item.command,
+                    "timeout_seconds": item.timeout_seconds,
+                }
+                for item in app_ctx.config.doctor.app_command_checks
+            ]
         },
     }
     return yaml.safe_dump(payload, sort_keys=False)
@@ -168,6 +196,7 @@ def init(
                     Path(app_ctx.config.state_path),
                     domain,
                 )
+                phase_commands = build_deploy_phase_commands(app_ctx.config.deploy)
                 payload = {
                     "domain": domain,
                     "php": "8.3",
@@ -188,15 +217,25 @@ def init(
                     shared_dirs=app_ctx.config.deploy.shared_dirs,
                     shared_files=app_ctx.config.deploy.shared_files,
                 )
+                build_reports = run_release_commands(
+                    workdir=release_dir,
+                    phase="build",
+                    commands=phase_commands["build"],
+                    timeout_seconds=app_ctx.config.deploy.build_timeout_seconds,
+                )
                 pre_activate_reports = run_release_commands(
                     workdir=release_dir,
-                    commands=list(app_ctx.config.deploy.pre_activate_commands),
+                    phase="pre-activate",
+                    commands=phase_commands["pre_activate"],
+                    timeout_seconds=app_ctx.config.deploy.pre_activate_timeout_seconds,
                 )
                 activate_release(paths, release_dir)
                 current_path = paths.current.resolve(strict=True)
                 post_activate_reports = run_release_commands(
                     workdir=current_path,
-                    commands=list(app_ctx.config.deploy.post_activate_commands),
+                    phase="post-activate",
+                    commands=phase_commands["post_activate"],
+                    timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
                 )
                 health_check = run_http_health_check(
                     domain=domain,
@@ -212,6 +251,12 @@ def init(
                 )
                 if health_check["status"] == "failed":
                     raise AppLifecycleError(f"Deploy health check failed: {health_check.get('detail', 'unknown')}")
+                verify_reports = run_release_commands(
+                    workdir=current_path,
+                    phase="verify",
+                    commands=phase_commands["verify"],
+                    timeout_seconds=app_ctx.config.deploy.verify_timeout_seconds,
+                )
                 deleted_releases = prune_releases(paths, app_ctx.config.deploy.keep_releases)
 
                 metadata = load_metadata(paths.metadata)
@@ -220,11 +265,30 @@ def init(
                     "ref": ref,
                     "deployed_at": datetime.now(UTC).isoformat(),
                     "source": str(source_path),
+                    "build_reports": build_reports,
                     "pre_activate_reports": pre_activate_reports,
                     "post_activate_reports": post_activate_reports,
+                    "verify_reports": verify_reports,
                     "health_check": health_check,
                 }
                 save_metadata(paths.metadata, metadata)
+                write_release_manifest(
+                    release_dir,
+                    {
+                        "status": "deployed",
+                        "release_id": release_id,
+                        "ref": ref,
+                        "source": str(source_path),
+                        "deployed_at": datetime.now(UTC).isoformat(),
+                        "phase_reports": {
+                            "build": build_reports,
+                            "pre_activate": pre_activate_reports,
+                            "post_activate": post_activate_reports,
+                            "verify": verify_reports,
+                        },
+                        "health_check": health_check,
+                    },
+                )
                 app_ctx.emit_output(
                     "ok",
                     f"Bootstrap app deploy completed for {domain}",

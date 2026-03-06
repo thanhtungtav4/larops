@@ -24,10 +24,12 @@ from larops.services.app_lifecycle import (
     switch_current_symlink,
 )
 from larops.services.release_service import (
+    build_deploy_phase_commands,
     ReleaseServiceError,
     prepare_release_candidate,
     run_http_health_check,
     run_release_commands,
+    write_release_manifest,
 )
 from larops.services.runtime_process import RuntimeProcessError, enable_process
 from larops.services.runtime_process import disable_process as runtime_disable_process
@@ -716,6 +718,7 @@ def create_site(
             initialize_app(paths, metadata_payload, overwrite=force)
 
             if deploy:
+                phase_commands = build_deploy_phase_commands(app_ctx.config.deploy)
                 release_id, release_dir = prepare_release_candidate(
                     paths=paths,
                     source_path=source_path,
@@ -723,15 +726,25 @@ def create_site(
                     shared_dirs=app_ctx.config.deploy.shared_dirs,
                     shared_files=app_ctx.config.deploy.shared_files,
                 )
+                build_reports = run_release_commands(
+                    workdir=release_dir,
+                    phase="build",
+                    commands=phase_commands["build"],
+                    timeout_seconds=app_ctx.config.deploy.build_timeout_seconds,
+                )
                 pre_activate_reports = run_release_commands(
                     workdir=release_dir,
-                    commands=list(app_ctx.config.deploy.pre_activate_commands),
+                    phase="pre-activate",
+                    commands=phase_commands["pre_activate"],
+                    timeout_seconds=app_ctx.config.deploy.pre_activate_timeout_seconds,
                 )
                 activate_release(paths, release_dir)
                 current_path = paths.current.resolve(strict=True)
                 post_activate_reports = run_release_commands(
                     workdir=current_path,
-                    commands=list(app_ctx.config.deploy.post_activate_commands),
+                    phase="post-activate",
+                    commands=phase_commands["post_activate"],
+                    timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
                 )
                 health_check = run_http_health_check(
                     domain=domain,
@@ -747,6 +760,12 @@ def create_site(
                 )
                 if health_check["status"] == "failed":
                     raise AppLifecycleError(f"Deploy health check failed: {health_check.get('detail', 'unknown')}")
+                verify_reports = run_release_commands(
+                    workdir=current_path,
+                    phase="verify",
+                    commands=phase_commands["verify"],
+                    timeout_seconds=app_ctx.config.deploy.verify_timeout_seconds,
+                )
                 deleted_releases = prune_releases(paths, app_ctx.config.deploy.keep_releases)
                 metadata = load_metadata(paths.metadata)
                 metadata["last_deploy"] = {
@@ -754,11 +773,30 @@ def create_site(
                     "ref": ref,
                     "deployed_at": datetime.now(UTC).isoformat(),
                     "source": str(source_path),
+                    "build_reports": build_reports,
                     "pre_activate_reports": pre_activate_reports,
                     "post_activate_reports": post_activate_reports,
+                    "verify_reports": verify_reports,
                     "health_check": health_check,
                 }
                 save_metadata(paths.metadata, metadata)
+                write_release_manifest(
+                    release_dir,
+                    {
+                        "status": "deployed",
+                        "release_id": release_id,
+                        "ref": ref,
+                        "source": str(source_path),
+                        "deployed_at": datetime.now(UTC).isoformat(),
+                        "phase_reports": {
+                            "build": build_reports,
+                            "pre_activate": pre_activate_reports,
+                            "post_activate": post_activate_reports,
+                            "verify": verify_reports,
+                        },
+                        "health_check": health_check,
+                    },
+                )
 
             if any(runtime_plan.values()):
                 runtime_results = _enable_runtime_for_site(

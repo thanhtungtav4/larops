@@ -4,6 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.services.release_service import ReleaseServiceError
 
 runner = CliRunner()
 
@@ -75,6 +76,8 @@ def test_app_deploy_and_rollback_cycle(tmp_path: Path) -> None:
         ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source_two), "--apply"],
     )
     assert deploy_two.exit_code == 0
+    current_manifest = tmp_path / "apps" / "demo.test" / "current" / ".larops-deploy-manifest.json"
+    assert current_manifest.exists()
 
     info_before = runner.invoke(app, ["--config", str(config), "--json", "app", "info", "demo.test"])
     assert info_before.exit_code == 0
@@ -175,6 +178,67 @@ def test_deploy_rolls_back_on_health_check_failure(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr("larops.commands.app.run_http_health_check", lambda **_: next(health_results))
     create = runner.invoke(app, ["--config", str(config_file), "app", "create", "demo.test", "--apply"])
     assert create.exit_code == 0
+    deploy_one = runner.invoke(
+        app,
+        ["--config", str(config_file), "app", "deploy", "demo.test", "--source", str(source_one), "--apply"],
+    )
+    assert deploy_one.exit_code == 0
+
+    info_before = runner.invoke(app, ["--config", str(config_file), "--json", "app", "info", "demo.test"])
+    current_before = json.loads(info_before.stdout.strip())["current_release"]
+
+    deploy_two = runner.invoke(
+        app,
+        ["--config", str(config_file), "app", "deploy", "demo.test", "--source", str(source_two), "--apply"],
+    )
+    assert deploy_two.exit_code == 2
+
+    info_after = runner.invoke(app, ["--config", str(config_file), "--json", "app", "info", "demo.test"])
+    current_after = json.loads(info_after.stdout.strip())["current_release"]
+    assert current_after == current_before
+
+
+def test_deploy_rolls_back_on_verify_failure(tmp_path: Path, monkeypatch) -> None:
+    config_file = tmp_path / "larops.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 5",
+                "  verify_commands:",
+                "    - test -f README.txt",
+                "  rollback_on_verify_failure: true",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source_one = make_source(tmp_path, "src-one", "release-one")
+    source_two = make_source(tmp_path, "src-two", "release-two")
+    real_run_release_commands = __import__("larops.commands.app", fromlist=["run_release_commands"]).run_release_commands
+    verify_calls = {"count": 0}
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None) -> list[dict]:
+        if phase == "verify":
+            verify_calls["count"] += 1
+            if verify_calls["count"] == 2:
+                raise ReleaseServiceError("verify failed")
+        return real_run_release_commands(
+            workdir=workdir,
+            phase=phase,
+            commands=commands,
+            timeout_seconds=timeout_seconds,
+        )
+
+    monkeypatch.setattr("larops.commands.app.run_release_commands", fake_run_release_commands)
+    create = runner.invoke(app, ["--config", str(config_file), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+
     deploy_one = runner.invoke(
         app,
         ["--config", str(config_file), "app", "deploy", "demo.test", "--source", str(source_one), "--apply"],

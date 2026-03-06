@@ -31,6 +31,7 @@ def run(
                 domain=target,
                 unit_dir=Path(app_ctx.config.systemd.unit_dir),
                 systemd_manage=app_ctx.config.systemd.manage,
+                app_command_checks=list(app_ctx.config.doctor.app_command_checks),
             )
         )
     report = summarize(checks)
@@ -58,6 +59,7 @@ def quick(
                 domain=target,
                 unit_dir=Path(app_ctx.config.systemd.unit_dir),
                 systemd_manage=app_ctx.config.systemd.manage,
+                app_command_checks=list(app_ctx.config.doctor.app_command_checks),
             )
         )
     report = summarize(checks)

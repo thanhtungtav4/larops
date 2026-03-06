@@ -451,6 +451,51 @@ def test_db_auto_backup_status_and_disable(tmp_path: Path) -> None:
     assert not (tmp_path / "units" / "larops-db-backup-demo-test.timer").exists()
 
 
+def test_db_restore_verify_writes_report(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+    backup_file = tmp_path / "backup.sql.gz"
+    with gzip.open(backup_file, "wb") as handle:
+        handle.write(b"backup")
+
+    def fake_restore_verify_backup(**_: object) -> dict:
+        return {
+            "status": "ok",
+            "engine": "mysql",
+            "backup_file": str(backup_file),
+            "verify_database": "appdb_verify_20260306",
+            "table_count": 4,
+            "verified_at": "2026-03-06T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("larops.commands.db.restore_verify_backup", fake_restore_verify_backup)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "db",
+            "restore-verify",
+            "demo.test",
+            "--database",
+            "appdb",
+            "--backup-file",
+            str(backup_file),
+            "--credential-file",
+            str(secret),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    report_file = Path(payload["report_file"])
+    assert report_file.exists()
+    report_payload = json.loads(report_file.read_text(encoding="utf-8"))
+    assert report_payload["table_count"] == 4
+
+
 def test_db_backup_plan_mode_postgres(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     secret = tmp_path / "db.pgpass"

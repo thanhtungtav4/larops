@@ -15,6 +15,9 @@ class DeployConfig(BaseModel):
     releases_path: str = "/var/www"
     source_base_path: str = "/var/www/source"
     keep_releases: int = 5
+    build_timeout_seconds: int = 1800
+    pre_activate_timeout_seconds: int = 900
+    post_activate_timeout_seconds: int = 900
     health_check_path: str = "/up"
     health_check_enabled: bool = False
     health_check_scheme: str = "http"
@@ -28,6 +31,26 @@ class DeployConfig(BaseModel):
     runtime_refresh_strategy: str = "none"
     shared_dirs: list[str] = Field(default_factory=lambda: ["storage", "bootstrap/cache"])
     shared_files: list[str] = Field(default_factory=lambda: [".env"])
+    composer_install: bool = False
+    composer_binary: str = "composer"
+    composer_no_dev: bool = True
+    composer_optimize_autoloader: bool = True
+    asset_commands: list[str] = Field(default_factory=list)
+    migrate_enabled: bool = False
+    migrate_phase: str = "post-activate"
+    migrate_command: str = "php artisan migrate --force"
+    cache_warm_enabled: bool = False
+    cache_warm_commands: list[str] = Field(
+        default_factory=lambda: [
+            "php artisan config:cache",
+            "php artisan route:cache",
+            "php artisan view:cache",
+            "php artisan event:cache",
+        ]
+    )
+    verify_timeout_seconds: int = 300
+    verify_commands: list[str] = Field(default_factory=list)
+    rollback_on_verify_failure: bool = False
     pre_activate_commands: list[str] = Field(default_factory=list)
     post_activate_commands: list[str] = Field(default_factory=list)
 
@@ -70,6 +93,16 @@ class NotificationsConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
 
+class DoctorAppCommandCheckConfig(BaseModel):
+    name: str
+    command: str
+    timeout_seconds: int = 30
+
+
+class DoctorConfig(BaseModel):
+    app_command_checks: list[DoctorAppCommandCheckConfig] = Field(default_factory=list)
+
+
 class AppConfig(BaseModel):
     environment: str = "production"
     state_path: str = ".larops/state"
@@ -78,6 +111,7 @@ class AppConfig(BaseModel):
     runtime_policy: RuntimePolicyConfig = Field(default_factory=RuntimePolicyConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    doctor: DoctorConfig = Field(default_factory=DoctorConfig)
 
 
 def load_config(path: Path | None = None) -> AppConfig:

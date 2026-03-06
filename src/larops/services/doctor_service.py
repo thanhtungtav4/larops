@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
 
+from larops.config import DoctorAppCommandCheckConfig
 from larops.core.shell import run_command
 from larops.services.app_lifecycle import get_app_paths
-from larops.services.db_service import manifest_path
+from larops.services.db_service import manifest_path, restore_verify_report_path
 from larops.services.db_systemd import db_backup_service_name, db_backup_timer_name
 
 
@@ -86,6 +87,42 @@ def _check_latest_backup(state_path: Path, domain: str) -> DoctorCheck:
     return DoctorCheck(name=f"backup:{domain}", status=status, detail=detail)
 
 
+def _check_restore_verify_report(state_path: Path, domain: str) -> DoctorCheck:
+    report_path = restore_verify_report_path(state_path, domain)
+    if not report_path.exists():
+        return DoctorCheck(
+            name=f"backup-verify:{domain}",
+            status="warn",
+            detail=f"missing: {report_path}",
+        )
+    age_hours = (datetime.now(UTC).timestamp() - report_path.stat().st_mtime) / 3600
+    status = "ok" if age_hours <= 168 else "warn"
+    return DoctorCheck(
+        name=f"backup-verify:{domain}",
+        status=status,
+        detail=f"{report_path.name} age={int(age_hours)}h",
+    )
+
+
+def _run_app_command_check(
+    *,
+    current_path: Path,
+    check_config: DoctorAppCommandCheckConfig,
+) -> DoctorCheck:
+    script = f'cd "{str(current_path)}" && {check_config.command}'
+    try:
+        completed = run_command(
+            ["bash", "-lc", script],
+            check=True,
+            timeout_seconds=check_config.timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return DoctorCheck(name=f"app-check:{check_config.name}", status="error", detail=str(exc))
+    stdout = (completed.stdout or "").strip()
+    detail = stdout if stdout else "ok"
+    return DoctorCheck(name=f"app-check:{check_config.name}", status="ok", detail=detail)
+
+
 def run_host_checks(*, state_path: Path, events_path: Path, quick: bool, unit_dir: Path, systemd_manage: bool) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = [
         _check_path_writable(state_path),
@@ -117,6 +154,7 @@ def run_app_checks(
     domain: str,
     unit_dir: Path,
     systemd_manage: bool,
+    app_command_checks: list[DoctorAppCommandCheckConfig],
 ) -> list[DoctorCheck]:
     paths = get_app_paths(base_releases_path, state_path, domain)
     checks = []
@@ -142,6 +180,7 @@ def run_app_checks(
         )
     )
     checks.append(_check_latest_backup(state_path, domain))
+    checks.append(_check_restore_verify_report(state_path, domain))
     timer_unit_path = unit_dir / db_backup_timer_name(domain)
     service_unit_path = unit_dir / db_backup_service_name(domain)
     if service_unit_path.exists() or timer_unit_path.exists():
@@ -164,6 +203,9 @@ def run_app_checks(
                 detail="auto backup timer not configured",
             )
         )
+    if paths.current.exists():
+        for check_config in app_command_checks:
+            checks.append(_run_app_command_check(current_path=paths.current, check_config=check_config))
     return checks
 
 

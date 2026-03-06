@@ -149,6 +149,9 @@ deploy:
   releases_path: /var/www
   source_base_path: /var/www/source
   keep_releases: 5
+  build_timeout_seconds: 1800
+  pre_activate_timeout_seconds: 900
+  post_activate_timeout_seconds: 900
   health_check_path: /up
   health_check_enabled: false
   health_check_scheme: http
@@ -165,6 +168,23 @@ deploy:
     - bootstrap/cache
   shared_files:
     - .env
+  composer_install: false
+  composer_binary: composer
+  composer_no_dev: true
+  composer_optimize_autoloader: true
+  asset_commands: []
+  migrate_enabled: false
+  migrate_phase: post-activate
+  migrate_command: php artisan migrate --force
+  cache_warm_enabled: false
+  cache_warm_commands:
+    - php artisan config:cache
+    - php artisan route:cache
+    - php artisan view:cache
+    - php artisan event:cache
+  verify_timeout_seconds: 300
+  verify_commands: []
+  rollback_on_verify_failure: false
   pre_activate_commands: []
   post_activate_commands: []
 
@@ -203,6 +223,9 @@ notifications:
     chat_id_file: /etc/larops/secrets/telegram_chat_id
     min_severity: error
     batch_size: 20
+
+doctor:
+  app_command_checks: []
 ```
 
 Environment overrides are supported for key fields (including Telegram settings).
@@ -327,6 +350,7 @@ larops db credential set example.com --user appuser --apply
 larops db backup example.com --database appdb --retain-count 10 --apply
 larops db status example.com
 larops db verify --backup-file /path/backup.sql.gz
+larops db restore-verify example.com --backup-file /path/backup.sql.gz --database appdb --apply
 larops db auto-backup enable example.com --database appdb --apply
 larops db auto-backup status example.com
 larops db list-backups example.com
@@ -339,6 +363,7 @@ PostgreSQL example:
 export LAROPS_DB_PASSWORD="strong-password"
 larops db credential set example.com --engine postgres --user appuser --apply
 larops db backup example.com --engine postgres --database appdb --retain-count 10 --apply
+larops db restore-verify example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 larops db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
 
@@ -347,6 +372,19 @@ larops db restore example.com --engine postgres --backup-file /path/backup.sql.g
 ```bash
 larops doctor quick
 larops --json doctor run example.com
+```
+
+Optional app-level probes via `doctor.app_command_checks`:
+
+```yaml
+doctor:
+  app_command_checks:
+    - name: queue-failed-empty
+      command: "test \"$(php artisan queue:failed | tail -n +2 | wc -l | tr -d ' ')\" = \"0\""
+      timeout_seconds: 30
+    - name: app-about
+      command: "php artisan about --only=environment"
+      timeout_seconds: 30
 ```
 
 ### 8. Safe delete (guarded)
