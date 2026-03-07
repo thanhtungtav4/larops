@@ -45,6 +45,15 @@ from larops.services.ssl_service import (
 
 create_app = typer.Typer(help="WordOps-style create shortcuts.")
 
+_SITE_PROFILES: dict[str, dict[str, Any]] = {
+    "small-vps": {
+        "site_type": "laravel",
+        "cache": "fastcgi",
+        "php": "8.3",
+        "runtime": {"worker": False},
+    }
+}
+
 _TYPE_PRESETS: dict[str, dict[str, Any]] = {
     "php": {"db": "none", "ssl": False, "runtime": {"worker": False, "scheduler": False, "horizon": False}},
     "mysql": {"db": "mysql", "ssl": False, "runtime": {"worker": False, "scheduler": False, "horizon": False}},
@@ -115,6 +124,7 @@ def _apply_profile_patch(profile: dict[str, Any], patch: dict[str, Any]) -> None
 
 def _resolve_site_profile(
     *,
+    profile_name: str | None,
     site_type: str | None,
     cache: str | None,
     worker: bool | None,
@@ -124,7 +134,27 @@ def _resolve_site_profile(
     php: str | None,
     ssl: bool | None,
 ) -> dict[str, Any]:
+    normalized_profile: str | None = None
+    profile_defaults: dict[str, Any] = {}
+    if profile_name:
+        normalized_profile = profile_name.strip().lower()
+        profile_defaults = _SITE_PROFILES.get(normalized_profile, {})
+        if not profile_defaults:
+            supported = ", ".join(sorted(_SITE_PROFILES))
+            raise RuntimeProcessError(f"Unsupported --profile: {profile_name}. Supported: {supported}.")
+
+    effective_type = site_type or profile_defaults.get("site_type")
+    effective_cache = cache or profile_defaults.get("cache")
+    effective_db = db if db is not None else profile_defaults.get("db")
+    effective_php = php if php is not None else profile_defaults.get("php")
+    effective_ssl = ssl if ssl is not None else profile_defaults.get("ssl")
+    runtime_defaults = dict(profile_defaults.get("runtime", {}))
+    effective_worker = worker if worker is not None else runtime_defaults.get("worker")
+    effective_scheduler = scheduler if scheduler is not None else runtime_defaults.get("scheduler")
+    effective_horizon = horizon if horizon is not None else runtime_defaults.get("horizon")
+
     profile: dict[str, Any] = {
+        "preset": normalized_profile,
         "type": "custom",
         "cache": "none",
         "db": "mysql",
@@ -132,36 +162,36 @@ def _resolve_site_profile(
         "ssl": False,
         "runtime": {"worker": False, "scheduler": False, "horizon": False},
     }
-    if site_type:
-        normalized_type = site_type.strip().lower()
+    if effective_type:
+        normalized_type = str(effective_type).strip().lower()
         preset = _TYPE_PRESETS.get(normalized_type)
         if preset is None:
             supported = ", ".join(sorted(_TYPE_PRESETS))
-            raise RuntimeProcessError(f"Unsupported --type: {site_type}. Supported: {supported}.")
+            raise RuntimeProcessError(f"Unsupported --type: {effective_type}. Supported: {supported}.")
         _apply_profile_patch(profile, preset)
         profile["type"] = normalized_type
 
-    if cache:
-        normalized_cache = cache.strip().lower()
+    if effective_cache:
+        normalized_cache = str(effective_cache).strip().lower()
         cache_preset = _CACHE_PRESETS.get(normalized_cache)
         if cache_preset is None:
             supported = ", ".join(sorted(_CACHE_PRESETS))
-            raise RuntimeProcessError(f"Unsupported --cache: {cache}. Supported: {supported}.")
+            raise RuntimeProcessError(f"Unsupported --cache: {effective_cache}. Supported: {supported}.")
         _apply_profile_patch(profile, cache_preset)
         profile["cache"] = normalized_cache
 
-    if db is not None:
-        profile["db"] = db
-    if php is not None:
-        profile["php"] = php
-    if ssl is not None:
-        profile["ssl"] = ssl
-    if worker is not None:
-        profile["runtime"]["worker"] = worker
-    if scheduler is not None:
-        profile["runtime"]["scheduler"] = scheduler
-    if horizon is not None:
-        profile["runtime"]["horizon"] = horizon
+    if effective_db is not None:
+        profile["db"] = effective_db
+    if effective_php is not None:
+        profile["php"] = effective_php
+    if effective_ssl is not None:
+        profile["ssl"] = effective_ssl
+    if effective_worker is not None:
+        profile["runtime"]["worker"] = effective_worker
+    if effective_scheduler is not None:
+        profile["runtime"]["scheduler"] = effective_scheduler
+    if effective_horizon is not None:
+        profile["runtime"]["horizon"] = effective_horizon
     return profile
 
 
@@ -543,6 +573,11 @@ def create_site(
     ),
     ref: str = typer.Option("main", "--ref", "-r", help="Source ref metadata."),
     deploy: bool = typer.Option(True, "--deploy/--no-deploy", help="Deploy source after create."),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Site profile preset. Example: small-vps.",
+    ),
     site_type: str | None = typer.Option(
         None,
         "--type",
@@ -595,6 +630,7 @@ def create_site(
     app_ctx: AppContext = ctx.obj
     try:
         site_profile = _resolve_site_profile(
+            profile_name=profile,
             site_type=site_type,
             cache=cache,
             worker=worker,

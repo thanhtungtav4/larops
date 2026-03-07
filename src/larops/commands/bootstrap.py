@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import typer
 import yaml
 
+from larops.config import AppConfig
 from larops.core.locks import CommandLock, CommandLockError
 from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
@@ -32,8 +34,69 @@ from larops.services.stack_service import apply_stack_plan, build_stack_plan, re
 
 bootstrap_app = typer.Typer(help="Bootstrap empty servers like WordOps-style one-shot setup.")
 
+_BOOTSTRAP_PROFILES: dict[str, dict[str, object]] = {
+    "default": {
+        "groups": {
+            "web": True,
+            "data": True,
+            "postgres": False,
+            "ops": True,
+        },
+        "runtime_policy": {
+            "worker": {"max_restarts": 5, "window_seconds": 300, "cooldown_seconds": 120, "auto_heal": True},
+            "scheduler": {"max_restarts": 5, "window_seconds": 300, "cooldown_seconds": 120, "auto_heal": True},
+            "horizon": {"max_restarts": 5, "window_seconds": 300, "cooldown_seconds": 120, "auto_heal": True},
+        },
+        "telegram_batch_size": 20,
+    },
+    "small-vps": {
+        "groups": {
+            "web": True,
+            "data": False,
+            "postgres": False,
+            "ops": True,
+        },
+        "runtime_policy": {
+            "worker": {"max_restarts": 3, "window_seconds": 600, "cooldown_seconds": 180, "auto_heal": True},
+            "scheduler": {"max_restarts": 3, "window_seconds": 600, "cooldown_seconds": 180, "auto_heal": True},
+            "horizon": {"max_restarts": 2, "window_seconds": 900, "cooldown_seconds": 300, "auto_heal": True},
+        },
+        "telegram_batch_size": 10,
+    },
+}
 
-def _default_config_yaml(app_ctx: AppContext) -> str:
+
+def _resolve_bootstrap_profile(profile: str) -> dict[str, object]:
+    normalized = profile.strip().lower()
+    resolved = _BOOTSTRAP_PROFILES.get(normalized)
+    if resolved is None:
+        supported = ", ".join(sorted(_BOOTSTRAP_PROFILES))
+        raise typer.BadParameter(f"Unsupported --profile: {profile}. Supported: {supported}.")
+    return {"name": normalized, **resolved}
+
+
+def _effective_bootstrap_runtime_policy(app_ctx: AppContext, *, profile_name: str) -> dict[str, object]:
+    current_policy = app_ctx.config.runtime_policy.model_dump()
+    default_policy = AppConfig().runtime_policy.model_dump()
+    profile_policy = deepcopy(_resolve_bootstrap_profile(profile_name)["runtime_policy"])
+    resolved_policy = deepcopy(current_policy)
+    for process_type in ("worker", "scheduler", "horizon"):
+        if resolved_policy.get(process_type) == default_policy.get(process_type):
+            resolved_policy[process_type] = deepcopy(profile_policy[process_type])
+    return resolved_policy
+
+
+def _effective_bootstrap_telegram_batch_size(app_ctx: AppContext, *, profile_name: str) -> int:
+    current_batch_size = int(app_ctx.config.notifications.telegram.batch_size)
+    default_batch_size = int(AppConfig().notifications.telegram.batch_size)
+    if current_batch_size != default_batch_size:
+        return current_batch_size
+    return int(_resolve_bootstrap_profile(profile_name)["telegram_batch_size"])
+
+
+def _default_config_yaml(app_ctx: AppContext, *, profile_name: str) -> str:
+    runtime_policy = _effective_bootstrap_runtime_policy(app_ctx, profile_name=profile_name)
+    telegram_batch_size = _effective_bootstrap_telegram_batch_size(app_ctx, profile_name=profile_name)
     payload = {
         "environment": app_ctx.config.environment,
         "state_path": app_ctx.config.state_path,
@@ -78,6 +141,7 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
             "unit_dir": app_ctx.config.systemd.unit_dir,
             "user": app_ctx.config.systemd.user,
         },
+        "runtime_policy": runtime_policy,
         "events": {
             "sink": app_ctx.config.events.sink,
             "path": app_ctx.config.events.path,
@@ -90,7 +154,7 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
                 "chat_id": "",
                 "chat_id_file": app_ctx.config.notifications.telegram.chat_id_file,
                 "min_severity": app_ctx.config.notifications.telegram.min_severity,
-                "batch_size": app_ctx.config.notifications.telegram.batch_size,
+                "batch_size": telegram_batch_size,
             }
         },
         "backups": {
@@ -159,10 +223,11 @@ def _default_config_yaml(app_ctx: AppContext) -> str:
 @bootstrap_app.command("init")
 def init(
     ctx: typer.Context,
-    web: bool = typer.Option(True, "--web/--no-web", help="Install web stack group."),
-    data: bool = typer.Option(True, "--data/--no-data", help="Install data stack group."),
-    postgres: bool = typer.Option(False, "--postgres/--no-postgres", help="Install PostgreSQL stack group."),
-    ops: bool = typer.Option(True, "--ops/--no-ops", help="Install ops stack group."),
+    profile: str = typer.Option("default", "--profile", help="Bootstrap profile: default|small-vps."),
+    web: bool | None = typer.Option(None, "--web/--no-web", help="Install web stack group."),
+    data: bool | None = typer.Option(None, "--data/--no-data", help="Install data stack group."),
+    postgres: bool | None = typer.Option(None, "--postgres/--no-postgres", help="Install PostgreSQL stack group."),
+    ops: bool | None = typer.Option(None, "--ops/--no-ops", help="Install ops stack group."),
     skip_stack: bool = typer.Option(False, "--skip-stack", help="Skip stack installation stage."),
     write_config: bool = typer.Option(
         True,
@@ -183,7 +248,13 @@ def init(
 ) -> None:
     app_ctx: AppContext = ctx.obj
     host = socket.gethostname()
-    requested_groups = [] if skip_stack else resolve_groups(web, data, postgres, ops)
+    resolved_profile = _resolve_bootstrap_profile(profile)
+    default_groups = dict(resolved_profile["groups"])
+    effective_web = default_groups["web"] if web is None else web
+    effective_data = default_groups["data"] if data is None else data
+    effective_postgres = default_groups["postgres"] if postgres is None else postgres
+    effective_ops = default_groups["ops"] if ops is None else ops
+    requested_groups = [] if skip_stack else resolve_groups(effective_web, effective_data, effective_postgres, effective_ops)
     stack_plan = build_stack_plan(requested_groups) if requested_groups else None
     source_path = source.resolve()
 
@@ -203,6 +274,7 @@ def init(
             message="Bootstrap init started.",
             metadata={
                 "groups": requested_groups,
+                "profile": str(resolved_profile["name"]),
                 "write_config": write_config,
                 "config_path": str(config_path),
                 "domain": domain,
@@ -215,9 +287,11 @@ def init(
     app_ctx.emit_output(
         "ok",
         "Bootstrap plan prepared.",
+        profile=str(resolved_profile["name"]),
         write_config=write_config,
         config_path=str(config_path),
         stack_groups=requested_groups,
+        group_defaults=default_groups,
         stack_commands=stack_plan.commands if stack_plan else [],
         app_plan=app_plan,
         apply=apply,
@@ -232,7 +306,7 @@ def init(
         with CommandLock("bootstrap-init"):
             if write_config and not config_path.exists():
                 config_path.parent.mkdir(parents=True, exist_ok=True)
-                config_path.write_text(_default_config_yaml(app_ctx), encoding="utf-8")
+                config_path.write_text(_default_config_yaml(app_ctx, profile_name=str(resolved_profile["name"])), encoding="utf-8")
                 app_ctx.emit_output("ok", f"Created config file: {config_path}")
 
             if stack_plan:

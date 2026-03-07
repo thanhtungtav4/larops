@@ -132,6 +132,13 @@ larops bootstrap init --apply
 larops create site example.com --apply
 ```
 
+Biến thể cho VPS yếu:
+
+```bash
+larops bootstrap init --profile small-vps --apply
+larops create site example.com --profile small-vps --apply
+```
+
 Local development:
 
 ```bash
@@ -188,6 +195,10 @@ Lệnh này làm gì:
   - `ops` = `fail2ban`, `ufw`
 - Có thể ghi file config mặc định nếu bật `--write-config` và file đích chưa tồn tại.
 - Nếu có `--domain`, nó còn có thể khởi tạo app metadata và deploy release đầu tiên từ `--source`.
+- Có hỗ trợ `--profile small-vps` cho VPS yếu:
+  - mặc định chỉ giữ `web + ops`
+  - bỏ local `data` trừ khi bạn chủ động thêm `--data`
+  - ghi runtime restart policy bảo thủ hơn vào file config sinh ra
 
 Lệnh này không làm gì:
 
@@ -200,6 +211,7 @@ Hiểu ngắn gọn:
 
 - `bootstrap init` = chuẩn bị host
 - `site create` = flow tạo site theo góc nhìn ứng dụng
+- Với VPS yếu, nên bắt đầu bằng `larops bootstrap init --profile small-vps --apply`
 
 ### `larops site create`
 
@@ -209,6 +221,12 @@ Lệnh này làm gì:
 - Có thể deploy source vào release layout
 - Chạy deploy phases (`build`, `pre-activate`, `post-activate`, `verify`) nếu bật deploy
 - Có thể enable runtime theo preset hoặc theo flag
+- Có hỗ trợ `--profile small-vps` cho Laravel nhẹ hơn:
+  - `type=laravel`
+  - `cache=fastcgi`
+  - `worker=false`
+  - `scheduler=true`
+  - `horizon=false`
 - Có thể issue Let’s Encrypt nếu dùng `-le`
 - Có hỗ trợ `--atomic` để rollback khi create flow fail
 
@@ -517,6 +535,14 @@ larops site restore example.com --checkpoint-file /path/checkpoint.tar.gz --appl
 ## Preset site và runtime policy
 
 Preset `site create`:
+
+- `--profile small-vps`: preset Laravel nhẹ cho VPS yếu:
+  - `type=laravel`
+  - `cache=fastcgi`
+  - `worker=false`
+  - `scheduler=true`
+  - `horizon=false`
+  - flag explicit vẫn override được (`--worker`, `--cache redis`, `--no-scheduler`, ...)
 
 - `--type php`
 - `--type mysql`

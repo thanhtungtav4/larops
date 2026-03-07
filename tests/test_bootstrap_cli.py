@@ -36,6 +36,30 @@ def test_bootstrap_plan_mode(tmp_path: Path) -> None:
     assert "Bootstrap plan prepared." in result.stdout
 
 
+def test_bootstrap_small_vps_profile_skips_data_stack_by_default(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "bootstrap", "init", "--profile", "small-vps"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[0])
+    assert payload["profile"] == "small-vps"
+    assert payload["stack_groups"] == ["web", "ops"]
+    assert payload["group_defaults"] == {"web": True, "data": False, "postgres": False, "ops": True}
+
+
+def test_bootstrap_small_vps_profile_allows_explicit_data_override(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "bootstrap", "init", "--profile", "small-vps", "--data"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[0])
+    assert payload["stack_groups"] == ["web", "data", "ops"]
+
+
 def test_bootstrap_apply_with_domain_and_skip_stack(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     source = tmp_path / "source"
@@ -122,3 +146,86 @@ def test_bootstrap_write_config_does_not_materialize_telegram_secrets(tmp_path: 
     assert "123456" not in rendered
     assert f"bot_token_file: {bot_token_file}" in rendered
     assert f"chat_id_file: {chat_id_file}" in rendered
+
+
+def test_bootstrap_small_vps_profile_writes_conservative_runtime_policy(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    generated_config = tmp_path / "generated.yaml"
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "bootstrap",
+            "init",
+            "--profile",
+            "small-vps",
+            "--skip-stack",
+            "--write-config",
+            "--config-path",
+            str(generated_config),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    rendered = generated_config.read_text(encoding="utf-8")
+    assert "runtime_policy:" in rendered
+    assert "batch_size: 10" in rendered
+    assert "max_restarts: 3" in rendered
+    assert "cooldown_seconds: 180" in rendered
+
+
+def test_bootstrap_small_vps_profile_preserves_custom_runtime_policy_and_batch_size(tmp_path: Path) -> None:
+    config_file = tmp_path / "larops.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "environment: test",
+                f"state_path: {tmp_path / 'state'}",
+                "deploy:",
+                f"  releases_path: {tmp_path / 'apps'}",
+                "  keep_releases: 3",
+                "  health_check_path: /up",
+                "runtime_policy:",
+                "  worker:",
+                "    max_restarts: 9",
+                "    window_seconds: 111",
+                "    cooldown_seconds: 222",
+                "    auto_heal: true",
+                "notifications:",
+                "  telegram:",
+                "    batch_size: 7",
+                "events:",
+                "  sink: jsonl",
+                f"  path: {tmp_path / 'events.jsonl'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    generated_config = tmp_path / "generated-preserved.yaml"
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config_file),
+            "bootstrap",
+            "init",
+            "--profile",
+            "small-vps",
+            "--skip-stack",
+            "--write-config",
+            "--config-path",
+            str(generated_config),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    rendered = generated_config.read_text(encoding="utf-8")
+    assert "batch_size: 7" in rendered
+    assert "max_restarts: 9" in rendered
+    assert "window_seconds: 111" in rendered
+    assert "cooldown_seconds: 222" in rendered
+    assert "scheduler:" in rendered
+    assert "horizon:" in rendered

@@ -121,6 +121,13 @@ larops bootstrap init --apply
 larops create site example.com --apply
 ```
 
+Small VPS variant:
+
+```bash
+larops bootstrap init --profile small-vps --apply
+larops create site example.com --profile small-vps --apply
+```
+
 Install pinned version:
 
 ```bash
@@ -190,6 +197,10 @@ What it does:
   - `ops` = `fail2ban`, `ufw`
 - Writes a default config file when `--write-config` is enabled and the target file does not already exist.
 - If `--domain` is provided, it can also initialize app metadata and deploy an initial release from `--source`.
+- Supports `--profile small-vps` for weak servers:
+  - defaults stack groups to `web + ops`
+  - skips local `data` services unless you explicitly add `--data`
+  - writes a more conservative runtime restart policy into generated config
 
 What it does not do by itself:
 
@@ -202,6 +213,7 @@ Practical interpretation:
 
 - Use `bootstrap init` to prepare a fresh host.
 - Use `site create` when you want an application-oriented create flow.
+- On a weak VPS, start with `larops bootstrap init --profile small-vps --apply`.
 
 ### `larops site create`
 
@@ -211,6 +223,12 @@ What it does:
 - Optionally deploys the source into a release-based layout.
 - Runs deploy phases (`build`, `pre-activate`, `post-activate`, `verify`) when deploy is enabled.
 - Can enable runtime processes based on presets or explicit flags.
+- Supports `--profile small-vps` for a lighter Laravel default:
+  - `type=laravel`
+  - `cache=fastcgi`
+  - `worker=false`
+  - `scheduler=true`
+  - `horizon=false`
 - Can issue Let's Encrypt certificates when `-le` is used.
 - Supports `--atomic` rollback for safer first-site creation.
 
@@ -705,6 +723,16 @@ Delete behavior:
 ## Site Profile Presets
 
 `site create` supports preset mapping with override capability.
+
+Named site profiles:
+
+- `--profile small-vps`: lightweight Laravel defaults for weak servers:
+  - `type=laravel`
+  - `cache=fastcgi`
+  - `worker=false`
+  - `scheduler=true`
+  - `horizon=false`
+  - explicit flags still win (`--worker`, `--cache redis`, `--no-scheduler`, etc.)
 
 Type presets:
 

@@ -102,6 +102,71 @@ def test_create_site_profile_override_runtime_flag(tmp_path: Path) -> None:
     assert lines[0]["runtime"]["scheduler"] is True
 
 
+def test_create_site_small_vps_profile_applies_lightweight_defaults(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "create", "site", "demo.test", "--profile", "small-vps"],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["profile"]["preset"] == "small-vps"
+    assert lines[0]["profile"]["type"] == "laravel"
+    assert lines[0]["profile"]["cache"] == "fastcgi"
+    assert lines[0]["runtime"]["worker"] is False
+    assert lines[0]["runtime"]["scheduler"] is True
+    assert lines[0]["runtime"]["horizon"] is False
+    assert lines[0]["ssl"] is True
+
+
+def test_create_site_small_vps_profile_allows_explicit_worker_override(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "create",
+            "site",
+            "demo.test",
+            "--profile",
+            "small-vps",
+            "--worker",
+        ],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["runtime"]["worker"] is True
+
+
+def test_create_site_small_vps_profile_composes_consistently_with_explicit_type(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "create",
+            "site",
+            "demo.test",
+            "--profile",
+            "small-vps",
+            "--type",
+            "php",
+        ],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["profile"]["type"] == "php"
+    assert lines[0]["profile"]["cache"] == "fastcgi"
+    assert lines[0]["runtime"]["worker"] is False
+    assert lines[0]["runtime"]["scheduler"] is False
+    assert lines[0]["runtime"]["horizon"] is False
+    assert lines[0]["ssl"] is True
+
+
 def test_create_site_invalid_type_rejected(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(
@@ -110,6 +175,16 @@ def test_create_site_invalid_type_rejected(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "Unsupported --type" in result.stdout
+
+
+def test_create_site_invalid_profile_rejected(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--profile", "tiny-box"],
+    )
+    assert result.exit_code == 2
+    assert "Unsupported --profile" in result.stdout
 
 
 def test_create_site_cache_redis_enables_worker(tmp_path: Path) -> None:

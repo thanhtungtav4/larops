@@ -13,6 +13,12 @@ curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/i
 sudo larops bootstrap init --apply
 ```
 
+For a weak VPS that should avoid local DB/Redis by default:
+
+```bash
+sudo larops bootstrap init --profile small-vps --apply
+```
+
 ## 3) Configure LarOps
 
 Edit `/etc/larops/larops.yaml`:
