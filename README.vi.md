@@ -77,6 +77,40 @@ Production host:
 - quyền `root` hoặc `sudo` cho các tác vụ hệ thống
 - network outbound để cài package, gọi Let’s Encrypt, Telegram, object storage
 
+Hệ điều hành khuyến nghị:
+
+- Ubuntu 24.04 LTS
+- Ubuntu 22.04 LTS
+- Debian 12
+
+Khuyến nghị cấu hình VPS thực dụng:
+
+- Mức tối thiểu để lab / thử nghiệm:
+  - 1 vCPU
+  - 1 GB RAM
+  - 20 GB SSD
+  - chỉ phù hợp để test CLI, không phù hợp production Laravel nghiêm túc
+- Mức tối thiểu cho small production:
+  - 2 vCPU
+  - 2 GB RAM
+  - 40 GB SSD
+  - phù hợp 1 app Laravel nhỏ, traffic thấp, queue nhẹ
+- Mức khuyến nghị cho serious single-node Laravel host:
+  - 4 vCPU
+  - 4 đến 8 GB RAM
+  - 80+ GB SSD
+  - phù hợp chạy chung Nginx + PHP-FPM + MariaDB/Postgres + Redis + workers + monitoring trên một máy
+- Nếu có workload queue nặng, Horizon, import/export lớn:
+  - 4 đến 8 vCPU
+  - 8+ GB RAM
+  - SSD nhanh và đủ dư cho releases, logs, backups
+
+Ghi chú vận hành:
+
+- Nếu web, database, Redis và worker cùng chạy trên một VPS, RAM thường là nút thắt đầu tiên.
+- Offsite backup, log shipping và metrics exporter cũng tiêu tốn tài nguyên nền.
+- Với production single-node nghiêm túc, 2 GB RAM thường là mức “chạy được”, chưa phải mức “thoải mái”.
+
 Development:
 
 - Python 3.11+
@@ -241,6 +275,71 @@ Lệnh này không làm gì:
 
 - Không phải WAF
 - Không tự block traffic; nó emit event và alert
+
+### `larops site runtime enable|disable|reconcile|status`
+
+Lệnh này làm gì:
+
+- Quản lý runtime process cho site:
+  - `worker`
+  - `scheduler`
+  - `horizon`
+- Ghi runtime spec và, nếu bật, quản lý luôn `systemd` unit tương ứng.
+- `reconcile` cố gắng kéo runtime về trạng thái mong muốn nhưng vẫn tôn trọng restart policy.
+
+Lệnh này không làm gì:
+
+- Không deploy code ứng dụng
+- Không thay thế `app deploy`
+
+### `larops db offsite status`
+
+Lệnh này làm gì:
+
+- Kiểm tra artifact backup mã hóa đang nằm trên object storage
+- Báo freshness và phát hiện upload remote bị incomplete
+
+Lệnh này không làm gì:
+
+- Không tạo backup mới
+- Không verify ngữ nghĩa dữ liệu trong DB; đây là kiểm tra phía storage
+
+### `larops db offsite restore-verify`
+
+Lệnh này làm gì:
+
+- Tải artifact backup mã hóa từ object storage
+- Validate checksum và HMAC
+- restore vào DB tạm để xác nhận artifact có thể restore được thật
+
+Lệnh này không làm gì:
+
+- Không chứng minh dữ liệu nghiệp vụ bên trong là đúng
+- Nó xác nhận khả năng recover, không xác nhận business correctness
+
+### `larops observability logs enable`
+
+Lệnh này làm gì:
+
+- Cấu hình và quản lý hook log shipping bằng Vector
+- Ship log LarOps, log Laravel và log Nginx tới sink đã cấu hình
+
+Lệnh này không làm gì:
+
+- Không tự cung cấp log backend
+- Bạn vẫn cần nơi nhận log thật, ví dụ Vector upstream hoặc HTTP ingestion endpoint
+
+### `larops doctor metrics run`
+
+Lệnh này làm gì:
+
+- Chuyển health từ `doctor fleet` thành Prometheus textfile metrics
+- Cho phép nối LarOps health vào `node_exporter` textfile collector
+
+Lệnh này không làm gì:
+
+- Không phải monitoring platform hoàn chỉnh
+- Nó export health signal, không thay thế Prometheus/Grafana hay hệ alert riêng
 
 ### `larops doctor fleet`
 

@@ -71,6 +71,40 @@ Production host requirements:
 - Root or sudo access for stack install and system-level operations.
 - Network access to install packages and call external APIs (for SSL/Telegram).
 
+Recommended operating systems:
+
+- Ubuntu 24.04 LTS
+- Ubuntu 22.04 LTS
+- Debian 12
+
+Practical VPS sizing guidance:
+
+- Minimum lab / evaluation:
+  - 1 vCPU
+  - 1 GB RAM
+  - 20 GB SSD
+  - suitable only for CLI evaluation, not serious Laravel production
+- Minimum small production:
+  - 2 vCPU
+  - 2 GB RAM
+  - 40 GB SSD
+  - suitable for one small Laravel app with low traffic, careful queue usage, and limited background jobs
+- Recommended serious single-node Laravel host:
+  - 4 vCPU
+  - 4 to 8 GB RAM
+  - 80+ GB SSD
+  - suitable for Nginx + PHP-FPM + MariaDB/Postgres + Redis + workers + monitoring on one box
+- Heavier queue / Horizon / import workloads:
+  - 4 to 8 vCPU
+  - 8+ GB RAM
+  - fast SSD with enough headroom for releases, logs, and backups
+
+Operational notes:
+
+- If database, Redis, workers, and web all run on the same VPS, RAM pressure becomes the first bottleneck.
+- Offsite backups, log shipping, and metrics exporters also add background overhead.
+- For serious single-node production, 2 GB RAM is usually survivable but not comfortable.
+
 Development requirements:
 
 - Python 3.11+.
@@ -243,6 +277,71 @@ What it does not do:
 
 - It is not a WAF.
 - It does not block traffic itself; it emits events and alerts.
+
+### `larops site runtime enable|disable|reconcile|status`
+
+What it does:
+
+- Manages runtime processes for a site:
+  - `worker`
+  - `scheduler`
+  - `horizon`
+- Writes runtime specs and, when enabled, manages corresponding `systemd` units.
+- `reconcile` attempts to bring configured runtime back to the expected state while respecting restart policy limits.
+
+What it does not do:
+
+- It does not deploy application code.
+- It does not replace `app deploy`.
+
+### `larops db offsite status`
+
+What it does:
+
+- Inspects encrypted offsite backup artifacts in configured object storage.
+- Reports freshness and detects incomplete remote uploads.
+
+What it does not do:
+
+- It does not create a new backup.
+- It does not verify database contents semantically; it is a storage-side inspection.
+
+### `larops db offsite restore-verify`
+
+What it does:
+
+- Downloads encrypted backup artifacts from object storage.
+- Validates checksum and HMAC.
+- Restores into a temporary database and verifies that the artifact can actually be restored.
+
+What it does not do:
+
+- It does not mean your application-level data is semantically correct.
+- It validates recoverability, not business correctness.
+
+### `larops observability logs enable`
+
+What it does:
+
+- Configures and manages a log shipping hook using Vector.
+- Ships LarOps events, Laravel logs, and Nginx logs to a configured sink.
+
+What it does not do:
+
+- It does not provide a log backend by itself.
+- You still need an actual destination such as Vector upstream or HTTP log ingestion.
+
+### `larops doctor metrics run`
+
+What it does:
+
+- Converts `doctor fleet` health into Prometheus textfile metrics.
+- Lets you integrate LarOps health into node_exporter textfile collector workflows.
+
+What it does not do:
+
+- It is not a full monitoring platform.
+- It exports health signals; it does not replace Prometheus/Grafana or alert routing.
 
 ### `larops doctor fleet`
 
