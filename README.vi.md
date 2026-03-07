@@ -15,17 +15,18 @@ Ngôn ngữ tài liệu:
 4. Yêu cầu môi trường
 5. Cài đặt nhanh
 6. Khái niệm cốt lõi
-7. Cấu hình
-8. Luồng vận hành chuẩn
-9. Preset site và runtime policy
-10. Cheat sheet lệnh
-11. Telegram, metrics và log shipping
-12. Security automation
-13. Docker, local QA và CI/CD
-14. Ghi chú vận hành an toàn
-15. Troubleshooting
-16. Cấu trúc repo
-17. Tài liệu liên quan
+7. Ý nghĩa thực tế của các lệnh cấp cao
+8. Cấu hình
+9. Luồng vận hành chuẩn
+10. Preset site và runtime policy
+11. Cheat sheet lệnh
+12. Telegram, metrics và log shipping
+13. Security automation
+14. Docker, local QA và CI/CD
+15. Ghi chú vận hành an toàn
+16. Troubleshooting
+17. Cấu trúc repo
+18. Tài liệu liên quan
 
 ## LarOps là gì
 
@@ -137,6 +138,121 @@ Các process như `worker`, `scheduler`, `horizon` được biểu diễn bởi:
 ### 4. Deploy là release-based
 
 Mỗi lần deploy tạo một release riêng, rồi switch `current` sang release mới. Nhờ vậy rollback rõ ràng hơn so với overwrite trực tiếp mã nguồn đang chạy.
+
+## Ý nghĩa thực tế của các lệnh cấp cao
+
+Phần này dùng để tránh hiểu nhầm. Một số lệnh của LarOps nghe khá giống nhau, nhưng phạm vi tác động khác nhau.
+
+### `larops bootstrap init`
+
+Lệnh này làm gì:
+
+- Có thể cài các group package của host:
+  - `web` = `nginx`, PHP-FPM và các extension PHP lõi
+  - `data` = `mariadb-server`, `redis-server`
+  - `postgres` = `postgresql`
+  - `ops` = `fail2ban`, `ufw`
+- Có thể ghi file config mặc định nếu bật `--write-config` và file đích chưa tồn tại.
+- Nếu có `--domain`, nó còn có thể khởi tạo app metadata và deploy release đầu tiên từ `--source`.
+
+Lệnh này không làm gì:
+
+- Không thay thế hoàn toàn cho `site create`
+- Không tự issue SSL certificate
+- Không tự bật runtime processes trừ khi bạn bật ở bước sau
+- Không tự tạo full flow vhost production hoàn chỉnh cho app Laravel
+
+Hiểu ngắn gọn:
+
+- `bootstrap init` = chuẩn bị host
+- `site create` = flow tạo site theo góc nhìn ứng dụng
+
+### `larops site create`
+
+Lệnh này làm gì:
+
+- Tạo metadata cho app/domain
+- Có thể deploy source vào release layout
+- Chạy deploy phases (`build`, `pre-activate`, `post-activate`, `verify`) nếu bật deploy
+- Có thể enable runtime theo preset hoặc theo flag
+- Có thể issue Let’s Encrypt nếu dùng `-le`
+- Có hỗ trợ `--atomic` để rollback khi create flow fail
+
+Lệnh này không làm gì:
+
+- Không phải lệnh cài package toàn host
+- Giả định host đã được chuẩn bị ở mức cơ bản, thường là sau bootstrap
+
+### `larops app deploy`
+
+Lệnh này làm gì:
+
+- Tạo release mới từ source
+- switch `current` sang release mới
+- chạy deploy phases và health/verify checks nếu cấu hình bật
+- ghi metadata và release manifest
+
+Lệnh này không làm gì:
+
+- Không bootstrap host
+- Không phải flow tạo site lần đầu
+
+### `larops security install`
+
+Lệnh này làm gì:
+
+- Áp baseline security ở mức host:
+  - UFW allow SSH/HTTP/HTTPS
+  - optional UFW limit SSH
+  - Fail2ban jail/filter cho SSH và Nginx scan pattern phổ biến
+
+Lệnh này không làm gì:
+
+- Không harden policy của `sshd` beyond baseline firewall/jail
+- Không harden Nginx config
+- Đây là baseline security, chưa phải full host hardening
+
+### `larops security posture`
+
+Lệnh này làm gì:
+
+- Tạo report hợp nhất cho:
+  - baseline `ufw/fail2ban`
+  - `secure ssh`
+  - `secure nginx`
+  - monitor timers
+  - Telegram notifier
+  - app monitor timers của các app đã đăng ký
+
+Lệnh này không làm gì:
+
+- Không apply thay đổi nào
+- Đây là lệnh inspect/report, không phải remediation command
+
+### `larops monitor scan run`
+
+Lệnh này làm gì:
+
+- Đọc incremental Nginx access log từ offset đã lưu
+- Phát hiện probe như `/.env`, `/.git`, `wp-login.php`, path traversal và các path bẩn tương tự
+- Đánh giá `threshold-hits` trong `window-seconds` rolling window
+
+Lệnh này không làm gì:
+
+- Không phải WAF
+- Không tự block traffic; nó emit event và alert
+
+### `larops doctor fleet`
+
+Lệnh này làm gì:
+
+- Tổng hợp health của host và toàn bộ app đã đăng ký
+- Giúp operator xem runtime, backup, timers và app health ở một chỗ
+
+Lệnh này không làm gì:
+
+- Không phải application tracing sâu
+- Phụ thuộc vào những checks và telemetry mà LarOps thu được trên máy
 
 ## Cấu hình
 

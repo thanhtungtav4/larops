@@ -14,19 +14,20 @@ Language:
 3. [Requirements](#requirements)
 4. [Quick Start](#quick-start)
 5. [Core Concepts](#core-concepts)
-6. [Configuration](#configuration)
-7. [Standard Operations Flow](#standard-operations-flow)
-8. [Site Profile Presets](#site-profile-presets)
-9. [Runtime Policy Matrix](#runtime-policy-matrix)
-10. [Command Cheat Sheet](#command-cheat-sheet)
-11. [Telegram Notifications](#telegram-notifications)
-12. [Docker and Local QA](#docker-and-local-qa)
-13. [GitHub CI/CD](#github-cicd)
-14. [Release Process](#release-process)
-15. [Security and Safety Notes](#security-and-safety-notes)
-16. [Troubleshooting](#troubleshooting)
-17. [Repository Structure](#repository-structure)
-18. [Production Runbook](#production-runbook)
+6. [What High-Level Commands Actually Do](#what-high-level-commands-actually-do)
+7. [Configuration](#configuration)
+8. [Standard Operations Flow](#standard-operations-flow)
+9. [Site Profile Presets](#site-profile-presets)
+10. [Runtime Policy Matrix](#runtime-policy-matrix)
+11. [Command Cheat Sheet](#command-cheat-sheet)
+12. [Telegram Notifications](#telegram-notifications)
+13. [Docker and Local QA](#docker-and-local-qa)
+14. [GitHub CI/CD](#github-cicd)
+15. [Release Process](#release-process)
+16. [Security and Safety Notes](#security-and-safety-notes)
+17. [Troubleshooting](#troubleshooting)
+18. [Repository Structure](#repository-structure)
+19. [Production Runbook](#production-runbook)
 
 ## Why LarOps
 
@@ -139,6 +140,121 @@ Runtime processes are represented by JSON specs and optional systemd units:
 - `horizon`
 
 When `systemd.manage=true`, LarOps manages unit lifecycle (enable/disable/status/restart).
+
+## What High-Level Commands Actually Do
+
+This section exists to remove ambiguity. Several LarOps commands sound similar, but they do not have the same scope.
+
+### `larops bootstrap init`
+
+What it does:
+
+- Optionally installs the selected host package groups:
+  - `web` = `nginx`, PHP-FPM and core PHP extensions
+  - `data` = `mariadb-server`, `redis-server`
+  - `postgres` = `postgresql`
+  - `ops` = `fail2ban`, `ufw`
+- Writes a default config file when `--write-config` is enabled and the target file does not already exist.
+- If `--domain` is provided, it can also initialize app metadata and deploy an initial release from `--source`.
+
+What it does not do by itself:
+
+- It does not fully replace `site create`.
+- It does not automatically issue SSL certificates.
+- It does not automatically enable runtime processes unless you later run site/runtime commands.
+- It does not create a complete production vhost flow for a Laravel app on its own.
+
+Practical interpretation:
+
+- Use `bootstrap init` to prepare a fresh host.
+- Use `site create` when you want an application-oriented create flow.
+
+### `larops site create`
+
+What it does:
+
+- Creates app metadata for the domain.
+- Optionally deploys the source into a release-based layout.
+- Runs deploy phases (`build`, `pre-activate`, `post-activate`, `verify`) when deploy is enabled.
+- Can enable runtime processes based on presets or explicit flags.
+- Can issue Let's Encrypt certificates when `-le` is used.
+- Supports `--atomic` rollback for safer first-site creation.
+
+What it does not do:
+
+- It is not a general-purpose package installer for the whole host.
+- It assumes the host is already reasonably prepared or bootstrap has already happened.
+
+### `larops app deploy`
+
+What it does:
+
+- Creates a new release from source.
+- Switches `current` to the new release.
+- Runs configured deploy phases and optional health/verify checks.
+- Records deploy metadata and release manifest.
+
+What it does not do:
+
+- It does not implicitly bootstrap the host.
+- It is not the same as first-time site provisioning.
+
+### `larops security install`
+
+What it does:
+
+- Applies baseline host security controls:
+  - UFW allow rules for SSH/HTTP/HTTPS
+  - optional UFW SSH limiting
+  - Fail2ban jail/filter for SSH and suspicious Nginx scan patterns
+
+What it does not do:
+
+- It does not harden SSH daemon policy beyond baseline firewall/jail behavior.
+- It does not harden Nginx config itself.
+- It is baseline security, not full host hardening.
+
+### `larops security posture`
+
+What it does:
+
+- Produces a consolidated security view across:
+  - UFW / Fail2ban baseline
+  - `secure ssh`
+  - `secure nginx`
+  - monitor timers
+  - Telegram notifier
+  - registered app monitor timers
+
+What it does not do:
+
+- It does not apply any change.
+- It is an inspection/report command, not a remediation command.
+
+### `larops monitor scan run`
+
+What it does:
+
+- Reads Nginx access log incrementally from a saved offset.
+- Detects suspicious probes such as `/.env`, `/.git`, `wp-login.php`, traversal patterns, and similar paths.
+- Evaluates `threshold-hits` inside a rolling `window-seconds` window.
+
+What it does not do:
+
+- It is not a WAF.
+- It does not block traffic itself; it emits events and alerts.
+
+### `larops doctor fleet`
+
+What it does:
+
+- Summarizes health across the host and all registered apps.
+- Helps operators review runtime, backup, timers, and app health in one place.
+
+What it does not do:
+
+- It is not deep application tracing.
+- It depends on the checks and telemetry LarOps is able to collect locally.
 
 ## Configuration
 
