@@ -5,7 +5,7 @@ from larops.core.locks import CommandLock, CommandLockError
 from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
-from larops.services.stack_service import apply_stack_plan, build_stack_plan, resolve_groups
+from larops.services.stack_service import StackServiceError, apply_stack_plan, build_stack_plan, resolve_groups
 
 stack_app = typer.Typer(help="Manage host stack components.")
 
@@ -30,14 +30,24 @@ def install(
         app_ctx.emit_output("error", "No stack group selected. Use --web, --data, --postgres, or --ops.")
         raise typer.Exit(code=2)
 
-    plan = build_stack_plan(requested)
+    try:
+        plan = build_stack_plan(requested)
+    except StackServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     app_ctx.event_emitter.emit(
         EventRecord(
             severity="info",
             event_type="stack.install.started",
             host=host,
             message="Stack installation started.",
-            metadata={"groups": requested, "apply": apply, "dry_run": app_ctx.dry_run},
+            metadata={
+                "groups": requested,
+                "platform": plan.platform.label,
+                "support_level": plan.platform.support_level,
+                "apply": apply,
+                "dry_run": app_ctx.dry_run,
+            },
         )
     )
 
@@ -45,6 +55,8 @@ def install(
         "ok",
         f"Stack plan prepared for groups: {', '.join(requested)}",
         groups=requested,
+        platform=plan.platform.label,
+        support_level=plan.platform.support_level,
         commands=plan.commands,
         apply=apply,
         dry_run=app_ctx.dry_run,

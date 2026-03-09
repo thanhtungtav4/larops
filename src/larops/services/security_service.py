@@ -9,6 +9,7 @@ from typing import Any
 
 from larops.core.shell import run_command
 from larops.services.app_lifecycle import list_registered_apps
+from larops.services.stack_service import StackServiceError, detect_stack_platform
 from larops.services.monitor_systemd import (
     status_monitor_app_timer,
     status_monitor_fim_timer,
@@ -36,14 +37,20 @@ class SecurityReportError(RuntimeError):
     pass
 
 
+class SecurityServiceError(RuntimeError):
+    pass
+
+
 @dataclass(slots=True)
 class SecurityInstallPlan:
-    ufw_commands: list[list[str]]
+    firewall_backend: str
+    firewall_commands: list[list[str]]
     fail2ban_jail_path: Path
     fail2ban_filter_path: Path
     fail2ban_jail_body: str
     fail2ban_filter_body: str
     fail2ban_service: str = "fail2ban"
+    notes: list[str] | None = None
 
 
 def _normalize_ufw_logging(level: str) -> str:
@@ -53,11 +60,17 @@ def _normalize_ufw_logging(level: str) -> str:
     return "low"
 
 
-def render_fail2ban_jail(*, ssh_port: int, nginx_log_path: Path, fail2ban_log_path: Path) -> str:
+def render_fail2ban_jail(
+    *,
+    ssh_port: int,
+    nginx_log_path: Path,
+    fail2ban_log_path: Path,
+    banaction: str,
+) -> str:
     return "\n".join(
         [
             "[DEFAULT]",
-            "banaction = ufw",
+            f"banaction = {banaction}",
             "findtime = 10m",
             "maxretry = 5",
             "bantime = 1h",
@@ -110,31 +123,63 @@ def build_security_install_plan(
     nginx_log_path: Path,
     fail2ban_log_path: Path,
 ) -> SecurityInstallPlan:
-    commands: list[list[str]] = [
-        ["ufw", "allow", f"{ssh_port}/tcp"],
-        ["ufw", "allow", "80/tcp"],
-        ["ufw", "allow", "443/tcp"],
-    ]
-    if limit_ssh:
-        commands.append(["ufw", "limit", f"{ssh_port}/tcp"])
+    try:
+        platform = detect_stack_platform()
+    except StackServiceError as exc:
+        raise SecurityServiceError(str(exc)) from exc
 
     normalized_logging = _normalize_ufw_logging(ufw_logging)
-    if normalized_logging != "off":
-        commands.append(["ufw", "logging", normalized_logging])
+    notes: list[str] = []
+
+    if platform.family == "debian":
+        firewall_backend = "ufw"
+        commands: list[list[str]] = [
+            ["ufw", "allow", f"{ssh_port}/tcp"],
+            ["ufw", "allow", "80/tcp"],
+            ["ufw", "allow", "443/tcp"],
+        ]
+        if limit_ssh:
+            commands.append(["ufw", "limit", f"{ssh_port}/tcp"])
+        if normalized_logging != "off":
+            commands.append(["ufw", "logging", normalized_logging])
+        else:
+            commands.append(["ufw", "logging", "off"])
+        commands.append(["ufw", "--force", "enable"])
+        banaction = "ufw"
+    elif platform.family == "el9":
+        firewall_backend = "firewalld"
+        commands = [
+            ["systemctl", "enable", "--now", "firewalld"],
+            ["firewall-cmd", "--permanent", "--add-port", f"{ssh_port}/tcp"],
+            ["firewall-cmd", "--permanent", "--add-service", "http"],
+            ["firewall-cmd", "--permanent", "--add-service", "https"],
+            ["firewall-cmd", "--reload"],
+        ]
+        if limit_ssh:
+            notes.append("SSH rate limiting is not yet applied automatically on firewalld hosts; rely on Fail2ban.")
+        if normalized_logging != "off":
+            notes.append("Firewall logging level is currently only applied automatically for UFW hosts.")
+        if platform.os_id == "rhel":
+            notes.append(
+                "RHEL 9 still requires Fail2ban to be available from an enabled repository before applying the security baseline."
+            )
+        banaction = "firewallcmd-rich-rules"
     else:
-        commands.append(["ufw", "logging", "off"])
-    commands.append(["ufw", "--force", "enable"])
+        raise SecurityServiceError(f"Unsupported security platform family: {platform.family}")
 
     return SecurityInstallPlan(
-        ufw_commands=commands,
+        firewall_backend=firewall_backend,
+        firewall_commands=commands,
         fail2ban_jail_path=fail2ban_jail_path,
         fail2ban_filter_path=fail2ban_filter_path,
         fail2ban_jail_body=render_fail2ban_jail(
             ssh_port=ssh_port,
             nginx_log_path=nginx_log_path,
             fail2ban_log_path=fail2ban_log_path,
+            banaction=banaction,
         ),
         fail2ban_filter_body=render_fail2ban_filter(),
+        notes=notes or None,
     )
 
 
@@ -150,7 +195,7 @@ def apply_security_install_plan(plan: SecurityInstallPlan) -> dict[str, Any]:
     plan.fail2ban_filter_path.write_text(plan.fail2ban_filter_body, encoding="utf-8")
 
     try:
-        for command in plan.ufw_commands:
+        for command in plan.firewall_commands:
             run_command(command, check=True)
 
         run_command(["systemctl", "enable", "--now", plan.fail2ban_service], check=True)
@@ -167,10 +212,12 @@ def apply_security_install_plan(plan: SecurityInstallPlan) -> dict[str, Any]:
         raise
 
     return {
-        "ufw_commands_executed": plan.ufw_commands,
+        "firewall_backend": plan.firewall_backend,
+        "firewall_commands_executed": plan.firewall_commands,
         "fail2ban_jail_path": str(plan.fail2ban_jail_path),
         "fail2ban_filter_path": str(plan.fail2ban_filter_path),
         "fail2ban_service": plan.fail2ban_service,
+        "notes": plan.notes or [],
     }
 
 
@@ -179,7 +226,32 @@ def collect_security_status(
     fail2ban_jail_path: Path,
     fail2ban_filter_path: Path,
 ) -> dict[str, Any]:
-    ufw_status = run_command(["ufw", "status"], check=False)
+    try:
+        platform = detect_stack_platform()
+    except StackServiceError as exc:
+        raise SecurityServiceError(str(exc)) from exc
+
+    if platform.family == "debian":
+        firewall_status = run_command(["ufw", "status"], check=False)
+        firewall_report = {
+            "backend": "ufw",
+            "raw": (firewall_status.stdout or firewall_status.stderr or "").strip(),
+            "exit_code": firewall_status.returncode,
+        }
+    elif platform.family == "el9":
+        firewalld_active = run_command(["systemctl", "is-active", "firewalld"], check=False)
+        firewalld_enabled = run_command(["systemctl", "is-enabled", "firewalld"], check=False)
+        firewalld_state = run_command(["firewall-cmd", "--state"], check=False)
+        firewall_report = {
+            "backend": "firewalld",
+            "active": (firewalld_active.stdout or firewalld_active.stderr or "").strip(),
+            "enabled": (firewalld_enabled.stdout or firewalld_enabled.stderr or "").strip(),
+            "state": (firewalld_state.stdout or firewalld_state.stderr or "").strip(),
+            "exit_code": max(firewalld_active.returncode, firewalld_enabled.returncode, firewalld_state.returncode),
+        }
+    else:
+        raise SecurityServiceError(f"Unsupported security platform family: {platform.family}")
+
     fail2ban_status = run_command(["fail2ban-client", "status"], check=False)
     sshd_status = run_command(["fail2ban-client", "status", "sshd"], check=False)
     nginx_scan_status = run_command(["fail2ban-client", "status", "larops-nginx-scan"], check=False)
@@ -188,7 +260,7 @@ def collect_security_status(
         return (raw.stdout or raw.stderr or "").strip()
 
     return {
-        "ufw": {"raw": _output(ufw_status), "exit_code": ufw_status.returncode},
+        "firewall": firewall_report,
         "fail2ban": {"raw": _output(fail2ban_status), "exit_code": fail2ban_status.returncode},
         "jails": {
             "sshd": {"raw": _output(sshd_status), "exit_code": sshd_status.returncode},
@@ -205,10 +277,22 @@ def collect_security_status(
 
 
 def determine_security_status_level(report: dict[str, Any]) -> str:
-    if int(report["ufw"]["exit_code"]) != 0:
+    firewall = report.get("firewall", {})
+    backend = str(firewall.get("backend", "")).lower()
+    if int(firewall.get("exit_code", 1)) != 0:
         return "error"
-    ufw_raw = str(report["ufw"]["raw"]).lower()
-    if "status: inactive" in ufw_raw:
+    if backend == "ufw":
+        firewall_raw = str(firewall.get("raw", "")).lower()
+        if "status: inactive" in firewall_raw:
+            return "error"
+    elif backend == "firewalld":
+        if str(firewall.get("active", "")).strip().lower() != "active":
+            return "error"
+        if str(firewall.get("enabled", "")).strip().lower() not in {"enabled", "static"}:
+            return "error"
+        if str(firewall.get("state", "")).strip().lower() != "running":
+            return "error"
+    else:
         return "error"
 
     if int(report["fail2ban"]["exit_code"]) != 0:

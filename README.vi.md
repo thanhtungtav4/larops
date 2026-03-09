@@ -82,6 +82,17 @@ Hệ điều hành khuyến nghị:
 - Ubuntu 24.04 LTS
 - Ubuntu 22.04 LTS
 - Debian 12
+- Debian 13 (experimental)
+
+Các target experimental bổ sung:
+
+- Rocky Linux 9
+- AlmaLinux 9
+- RHEL 9
+
+Ma trận support chi tiết:
+
+- [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
 
 Khuyến nghị cấu hình VPS thực dụng:
 
@@ -192,7 +203,7 @@ Lệnh này làm gì:
   - `web` = `nginx`, PHP-FPM và các extension PHP lõi
   - `data` = `mariadb-server`, `redis-server`
   - `postgres` = `postgresql`
-  - `ops` = `fail2ban`, `ufw`
+  - `ops` = `fail2ban` và firewall backend của host (`ufw` trên Debian/Ubuntu, `firewalld` trên EL9)
 - Có thể ghi file config mặc định nếu bật `--write-config` và file đích chưa tồn tại.
 - Nếu có `--domain`, nó còn có thể khởi tạo app metadata và deploy release đầu tiên từ `--source`.
 - Có hỗ trợ `--profile small-vps` cho VPS yếu:
@@ -254,8 +265,8 @@ Lệnh này không làm gì:
 Lệnh này làm gì:
 
 - Áp baseline security ở mức host:
-  - UFW allow SSH/HTTP/HTTPS
-  - optional UFW limit SSH
+  - firewall allow SSH/HTTP/HTTPS (`ufw` trên Debian/Ubuntu, `firewalld` trên EL9)
+  - optional SSH rate limit trên host dùng UFW
   - Fail2ban jail/filter cho SSH và Nginx scan pattern phổ biến
 
 Lệnh này không làm gì:
@@ -263,13 +274,14 @@ Lệnh này không làm gì:
 - Không harden policy của `sshd` beyond baseline firewall/jail
 - Không harden Nginx config
 - Đây là baseline security, chưa phải full host hardening
+- EL9 hiện vẫn ở mức experimental, và một số distro có thể vẫn cần chuẩn bị repo Fail2ban thủ công
 
 ### `larops security posture`
 
 Lệnh này làm gì:
 
 - Tạo report hợp nhất cho:
-  - baseline `ufw/fail2ban`
+  - baseline `firewall/fail2ban`
   - `secure ssh`
   - `secure nginx`
   - monitor timers
@@ -674,8 +686,8 @@ LarOps hiện có 3 lớp chính:
 
 ### 1. Baseline
 
-- `security install`: UFW + Fail2ban baseline
-- `security status`: kiểm tra UFW, Fail2ban, jail/filter files
+- `security install`: firewall + Fail2ban baseline
+- `security status`: kiểm tra firewall backend hiện tại, Fail2ban, jail/filter files
 - `security report`: tổng hợp ban IP và scan log theo time window thật
 
 ### 2. Preventive hardening
@@ -831,6 +843,7 @@ tests/             unit/integration tests
 - Landing page song ngữ: [README.md](README.md)
 - English manual: [README.en.md](README.en.md)
 - Production runbook: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
+- OS support matrix: [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## Production Runbook

@@ -28,6 +28,7 @@ Language:
 17. [Troubleshooting](#troubleshooting)
 18. [Repository Structure](#repository-structure)
 19. [Production Runbook](#production-runbook)
+20. [OS Support Matrix](#os-support-matrix)
 
 ## Why LarOps
 
@@ -76,6 +77,17 @@ Recommended operating systems:
 - Ubuntu 24.04 LTS
 - Ubuntu 22.04 LTS
 - Debian 12
+- Debian 13 (experimental)
+
+Additional experimental targets:
+
+- Rocky Linux 9
+- AlmaLinux 9
+- RHEL 9
+
+Detailed support status:
+
+- [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
 
 Practical VPS sizing guidance:
 
@@ -194,7 +206,7 @@ What it does:
   - `web` = `nginx`, PHP-FPM and core PHP extensions
   - `data` = `mariadb-server`, `redis-server`
   - `postgres` = `postgresql`
-  - `ops` = `fail2ban`, `ufw`
+  - `ops` = `fail2ban` plus the host firewall backend (`ufw` on Debian/Ubuntu, `firewalld` on EL9)
 - Writes a default config file when `--write-config` is enabled and the target file does not already exist.
 - If `--domain` is provided, it can also initialize app metadata and deploy an initial release from `--source`.
 - Supports `--profile small-vps` for weak servers:
@@ -256,8 +268,8 @@ What it does not do:
 What it does:
 
 - Applies baseline host security controls:
-  - UFW allow rules for SSH/HTTP/HTTPS
-  - optional UFW SSH limiting
+  - host firewall allow rules for SSH/HTTP/HTTPS (`ufw` on Debian/Ubuntu, `firewalld` on EL9)
+  - optional SSH rate limiting on UFW hosts
   - Fail2ban jail/filter for SSH and suspicious Nginx scan patterns
 
 What it does not do:
@@ -265,13 +277,14 @@ What it does not do:
 - It does not harden SSH daemon policy beyond baseline firewall/jail behavior.
 - It does not harden Nginx config itself.
 - It is baseline security, not full host hardening.
+- EL9 support is still experimental, and some distributions may still require manual Fail2ban repo preparation.
 
 ### `larops security posture`
 
 What it does:
 
 - Produces a consolidated security view across:
-  - UFW / Fail2ban baseline
+  - firewall / Fail2ban baseline
   - `secure ssh`
   - `secure nginx`
   - monitor timers
@@ -1042,3 +1055,9 @@ tests/
 Detailed production checklist and procedures:
 
 - [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
+
+## OS Support Matrix
+
+Detailed OS support status and rollout guidance:
+
+- [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)

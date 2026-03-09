@@ -11,6 +11,18 @@ from larops.core.shell import ShellCommandError
 runner = CliRunner()
 
 
+def ubuntu_env(tmp_path: Path) -> dict[str, str]:
+    os_release = tmp_path / "os-release"
+    os_release.write_text('ID="ubuntu"\nVERSION_ID="24.04"\n', encoding="utf-8")
+    return {"LAROPS_STACK_OS_RELEASE_PATH": str(os_release)}
+
+
+def el9_env(tmp_path: Path, *, os_id: str = "rocky") -> dict[str, str]:
+    os_release = tmp_path / "os-release"
+    os_release.write_text(f'ID="{os_id}"\nVERSION_ID="9.4"\n', encoding="utf-8")
+    return {"LAROPS_STACK_OS_RELEASE_PATH": str(os_release)}
+
+
 def write_config(tmp_path: Path) -> Path:
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(
@@ -38,7 +50,7 @@ def write_config(tmp_path: Path) -> Path:
 
 def test_security_install_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
-    result = runner.invoke(app, ["--config", str(config), "security", "install"])
+    result = runner.invoke(app, ["--config", str(config), "security", "install"], env=ubuntu_env(tmp_path))
     assert result.exit_code == 0
     assert "Security install plan prepared." in result.stdout
     assert "Plan mode finished. Use --apply to execute changes." in result.stdout
@@ -72,6 +84,7 @@ def test_security_install_apply_writes_fail2ban_files(tmp_path: Path, monkeypatc
             str(tmp_path / "fail2ban.log"),
             "--apply",
         ],
+        env=ubuntu_env(tmp_path),
     )
     assert result.exit_code == 0
     assert jail_file.exists()
@@ -114,6 +127,7 @@ def test_security_install_apply_fails_when_fail2ban_systemctl_fails(tmp_path: Pa
             str(filter_file),
             "--apply",
         ],
+        env=ubuntu_env(tmp_path),
     )
     assert result.exit_code == 1
     assert "systemctl enable --now fail2ban" in result.stdout
@@ -147,6 +161,7 @@ def test_security_install_apply_restores_previous_fail2ban_files_on_failure(tmp_
             str(filter_file),
             "--apply",
         ],
+        env=ubuntu_env(tmp_path),
     )
     assert result.exit_code == 1
     assert jail_file.read_text(encoding="utf-8") == "[old-jail]\nenabled=true\n"
@@ -164,12 +179,13 @@ def test_security_status_json(tmp_path: Path, monkeypatch) -> None:
         return CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
-    result = runner.invoke(app, ["--config", str(config), "--json", "security", "status"])
+    result = runner.invoke(app, ["--config", str(config), "--json", "security", "status"], env=ubuntu_env(tmp_path))
     assert result.exit_code == 0
     lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
     payload = lines[-1]["report"]
-    assert payload["ufw"]["exit_code"] == 0
-    assert "Status: active" in payload["ufw"]["raw"]
+    assert payload["firewall"]["backend"] == "ufw"
+    assert payload["firewall"]["exit_code"] == 0
+    assert "Status: active" in payload["firewall"]["raw"]
 
 
 def test_security_status_errors_when_jail_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -206,6 +222,7 @@ def test_security_status_errors_when_jail_is_missing(tmp_path: Path, monkeypatch
             "--fail2ban-filter-file",
             str(filter_file),
         ],
+        env=ubuntu_env(tmp_path),
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[-1])
@@ -283,6 +300,7 @@ def test_security_posture_ok_when_controls_are_present(tmp_path: Path, monkeypat
             "--nginx-server-config-file",
             str(nginx_server),
         ],
+        env=ubuntu_env(tmp_path),
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[-1])
@@ -330,6 +348,7 @@ def test_security_posture_errors_when_hardening_files_are_missing(tmp_path: Path
             "--fail2ban-filter-file",
             str(fail2ban_filter),
         ],
+        env=ubuntu_env(tmp_path),
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[-1])
@@ -509,3 +528,101 @@ def test_security_report_invalid_since_fails(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config", str(config), "security", "report", "--since", "tomorrow"])
     assert result.exit_code == 2
     assert "Invalid --since format" in result.stdout
+
+
+def test_security_install_el9_plan_uses_firewalld(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(app, ["--config", str(config), "--json", "security", "install"], env=el9_env(tmp_path))
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[0])
+    assert payload["firewall_backend"] == "firewalld"
+    assert ["systemctl", "enable", "--now", "firewalld"] in payload["firewall_commands"]
+    assert ["firewall-cmd", "--reload"] in payload["firewall_commands"]
+
+
+def test_security_install_rhel_plan_mentions_fail2ban_repo_requirement(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(app, ["--config", str(config), "--json", "security", "install"], env=el9_env(tmp_path, os_id="rhel"))
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[0])
+    assert payload["firewall_backend"] == "firewalld"
+    assert any("Fail2ban" in note and "repository" in note for note in payload["notes"])
+
+
+def test_security_install_apply_el9_writes_firewalld_fail2ban_jail(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    jail_file = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    filter_file = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    calls: list[list[str]] = []
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        calls.append(command)
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "security",
+            "install",
+            "--fail2ban-jail-file",
+            str(jail_file),
+            "--fail2ban-filter-file",
+            str(filter_file),
+            "--apply",
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    jail_body = jail_file.read_text(encoding="utf-8")
+    assert "[DEFAULT]\nbanaction = firewallcmd-rich-rules" in jail_body
+    assert ["systemctl", "enable", "--now", "firewalld"] in calls
+    assert ["firewall-cmd", "--reload"] in calls
+
+
+def test_security_status_el9_uses_firewalld_state(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    jail_file = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    filter_file = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    jail_file.parent.mkdir(parents=True, exist_ok=True)
+    filter_file.parent.mkdir(parents=True, exist_ok=True)
+    jail_file.write_text("[sshd]\nenabled=true\n[larops-nginx-scan]\nenabled=true\n", encoding="utf-8")
+    filter_file.write_text("[Definition]\nfailregex = test\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:3] == ["systemctl", "is-active", "firewalld"]:
+            return CompletedProcess(command, 0, stdout="active\n", stderr="")
+        if command[:3] == ["systemctl", "is-enabled", "firewalld"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--state"]:
+            return CompletedProcess(command, 0, stdout="running\n", stderr="")
+        if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
+            return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "sshd"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: sshd\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "larops-nginx-scan"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: larops-nginx-scan\n", stderr="")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "security",
+            "status",
+            "--fail2ban-jail-file",
+            str(jail_file),
+            "--fail2ban-filter-file",
+            str(filter_file),
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["report"]["firewall"]["backend"] == "firewalld"
+    assert payload["status"] == "ok"

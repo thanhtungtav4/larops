@@ -8,10 +8,15 @@ LAROPS_VERSION="${LAROPS_VERSION:-0.1.0}"
 LAROPS_RELEASE_BASE_URL="${LAROPS_RELEASE_BASE_URL:-https://github.com/thanhtungtav4/larops/releases/download}"
 LAROPS_ALLOW_UNPINNED="${LAROPS_ALLOW_UNPINNED:-false}"
 LAROPS_SKIP_CHECKSUM="${LAROPS_SKIP_CHECKSUM:-false}"
+LAROPS_ALLOW_UNSUPPORTED_OS="${LAROPS_ALLOW_UNSUPPORTED_OS:-false}"
 
 INSTALL_STAGING_DIR="${LAROPS_INSTALL_DIR}.new.$$"
 INSTALL_BACKUP_DIR="${LAROPS_INSTALL_DIR}.bak.$$"
 INSTALL_SUCCEEDED=false
+OS_ID=""
+OS_VERSION_ID=""
+OS_SUPPORT_LEVEL="unsupported"
+PACKAGE_MANAGER=""
 
 is_true() {
   local raw
@@ -35,6 +40,94 @@ assert_safe_install_dir() {
   case "${LAROPS_INSTALL_DIR}" in
     ""|"/"|"/opt"|"/usr"|"/var"|"/etc"|"/home")
       echo "[larops-install] Unsafe install dir: ${LAROPS_INSTALL_DIR}"
+      exit 1
+      ;;
+  esac
+}
+
+load_os_release() {
+  if [[ ! -r /etc/os-release ]]; then
+    echo "[larops-install] Missing /etc/os-release. Cannot determine host OS."
+    exit 1
+  fi
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_ID="$(printf '%s' "${ID:-}" | tr '[:upper:]' '[:lower:]')"
+  OS_VERSION_ID="$(printf '%s' "${VERSION_ID:-}" | tr '[:upper:]' '[:lower:]')"
+}
+
+detect_os_support_level() {
+  case "${OS_ID}:${OS_VERSION_ID}" in
+    ubuntu:22.04|ubuntu:24.04|debian:12)
+      OS_SUPPORT_LEVEL="ga"
+      PACKAGE_MANAGER="apt"
+      ;;
+    debian:13)
+      OS_SUPPORT_LEVEL="experimental"
+      PACKAGE_MANAGER="apt"
+      ;;
+    rocky:9*|almalinux:9*|rhel:9*)
+      OS_SUPPORT_LEVEL="experimental"
+      PACKAGE_MANAGER="dnf"
+      ;;
+    *)
+      OS_SUPPORT_LEVEL="unsupported"
+      if command -v apt-get >/dev/null 2>&1; then
+        PACKAGE_MANAGER="apt"
+      elif command -v dnf >/dev/null 2>&1; then
+        PACKAGE_MANAGER="dnf"
+      else
+        PACKAGE_MANAGER=""
+      fi
+      ;;
+  esac
+}
+
+assert_supported_os() {
+  load_os_release
+  detect_os_support_level
+
+  case "${OS_SUPPORT_LEVEL}" in
+    ga)
+      echo "[larops-install] Detected supported OS: ${OS_ID} ${OS_VERSION_ID}"
+      ;;
+    experimental)
+      echo "[larops-install] Detected experimental OS: ${OS_ID} ${OS_VERSION_ID}"
+      echo "[larops-install] Package naming and runtime layout are expected to be close to a supported family."
+      ;;
+    unsupported)
+      echo "[larops-install] Unsupported OS: ${OS_ID:-unknown} ${OS_VERSION_ID:-unknown}"
+      echo "[larops-install] Supported today: Ubuntu 22.04/24.04, Debian 12."
+      echo "[larops-install] Experimental: Debian 13, Rocky Linux 9, AlmaLinux 9, RHEL 9."
+      if ! is_true "${LAROPS_ALLOW_UNSUPPORTED_OS}"; then
+        echo "[larops-install] Refusing install on unsupported OS."
+        echo "[larops-install] Set LAROPS_ALLOW_UNSUPPORTED_OS=true only if you accept package-manager-family assumptions."
+        exit 1
+      fi
+      echo "[larops-install] WARNING: continuing because LAROPS_ALLOW_UNSUPPORTED_OS=true."
+      ;;
+  esac
+
+  if [[ -z "${PACKAGE_MANAGER}" ]]; then
+    echo "[larops-install] Unable to determine package manager for ${OS_ID:-unknown} ${OS_VERSION_ID:-unknown}."
+    exit 1
+  fi
+}
+
+install_base_dependencies() {
+  echo "[larops-install] Installing base dependencies..."
+  case "${PACKAGE_MANAGER}" in
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y git curl ca-certificates python3 python3-venv python3-pip tar
+      ;;
+    dnf)
+      dnf makecache -y
+      dnf install -y git curl ca-certificates python3 python3-pip tar
+      ;;
+    *)
+      echo "[larops-install] Unsupported package manager: ${PACKAGE_MANAGER}"
       exit 1
       ;;
   esac
@@ -152,11 +245,9 @@ if [[ "${LAROPS_VERSION}" == "latest" || "${LAROPS_VERSION}" == "main" ]]; then
 fi
 
 assert_safe_install_dir
+assert_supported_os
 
-echo "[larops-install] Installing base dependencies..."
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y git curl ca-certificates python3 python3-venv python3-pip tar
+install_base_dependencies
 
 if [[ "${LAROPS_VERSION}" == "latest" || "${LAROPS_VERSION}" == "main" ]]; then
   stage_from_latest "${INSTALL_STAGING_DIR}"

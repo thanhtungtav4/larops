@@ -11,6 +11,7 @@ from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.security_service import (
     SecurityReportError,
+    SecurityServiceError,
     apply_security_install_plan,
     build_security_install_plan,
     build_security_report,
@@ -78,25 +79,31 @@ def install(
         app_ctx.emit_output("error", "SSH port must be between 1 and 65535.")
         raise typer.Exit(code=2)
 
-    plan = build_security_install_plan(
-        ssh_port=ssh_port,
-        limit_ssh=limit_ssh,
-        ufw_logging=ufw_logging,
-        fail2ban_jail_path=fail2ban_jail_file,
-        fail2ban_filter_path=fail2ban_filter_file,
-        nginx_log_path=nginx_log_path,
-        fail2ban_log_path=fail2ban_log_path,
-    )
+    try:
+        plan = build_security_install_plan(
+            ssh_port=ssh_port,
+            limit_ssh=limit_ssh,
+            ufw_logging=ufw_logging,
+            fail2ban_jail_path=fail2ban_jail_file,
+            fail2ban_filter_path=fail2ban_filter_file,
+            nginx_log_path=nginx_log_path,
+            fail2ban_log_path=fail2ban_log_path,
+        )
+    except SecurityServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     app_ctx.emit_output(
         "ok",
         "Security install plan prepared.",
         ssh_port=ssh_port,
         limit_ssh=limit_ssh,
-        ufw_commands=plan.ufw_commands,
+        firewall_backend=plan.firewall_backend,
+        firewall_commands=plan.firewall_commands,
         fail2ban_jail_file=str(plan.fail2ban_jail_path),
         fail2ban_filter_file=str(plan.fail2ban_filter_path),
         nginx_log_path=str(nginx_log_path),
         fail2ban_log_path=str(fail2ban_log_path),
+        notes=plan.notes or [],
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -159,10 +166,14 @@ def status(
     ),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    report = collect_security_status(
-        fail2ban_jail_path=fail2ban_jail_file,
-        fail2ban_filter_path=fail2ban_filter_file,
-    )
+    try:
+        report = collect_security_status(
+            fail2ban_jail_path=fail2ban_jail_file,
+            fail2ban_filter_path=fail2ban_filter_file,
+        )
+    except SecurityServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     status_level = determine_security_status_level(report)
     app_ctx.emit_output(status_level, "Security status.", report=report)
 
@@ -208,17 +219,21 @@ def posture(
     ),
 ) -> None:
     app_ctx: AppContext = ctx.obj
-    report = collect_security_posture(
-        state_path=Path(app_ctx.config.state_path),
-        unit_dir=Path(app_ctx.config.systemd.unit_dir),
-        systemd_manage=app_ctx.config.systemd.manage,
-        fail2ban_jail_path=fail2ban_jail_file,
-        fail2ban_filter_path=fail2ban_filter_file,
-        sshd_drop_in_file=sshd_drop_in_file,
-        nginx_http_config_file=nginx_http_config_file,
-        nginx_server_snippet_file=nginx_server_snippet_file,
-        nginx_server_config_file=nginx_server_config_file,
-    )
+    try:
+        report = collect_security_posture(
+            state_path=Path(app_ctx.config.state_path),
+            unit_dir=Path(app_ctx.config.systemd.unit_dir),
+            systemd_manage=app_ctx.config.systemd.manage,
+            fail2ban_jail_path=fail2ban_jail_file,
+            fail2ban_filter_path=fail2ban_filter_file,
+            sshd_drop_in_file=sshd_drop_in_file,
+            nginx_http_config_file=nginx_http_config_file,
+            nginx_server_snippet_file=nginx_server_snippet_file,
+            nginx_server_config_file=nginx_server_config_file,
+        )
+    except SecurityServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     app_ctx.emit_output(report["level"], "Security posture.", report=report)
 
 

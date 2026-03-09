@@ -30,7 +30,7 @@ from larops.services.release_service import (
     run_release_commands,
     write_release_manifest,
 )
-from larops.services.stack_service import apply_stack_plan, build_stack_plan, resolve_groups
+from larops.services.stack_service import StackServiceError, apply_stack_plan, build_stack_plan, resolve_groups
 
 bootstrap_app = typer.Typer(help="Bootstrap empty servers like WordOps-style one-shot setup.")
 
@@ -255,7 +255,11 @@ def init(
     effective_postgres = default_groups["postgres"] if postgres is None else postgres
     effective_ops = default_groups["ops"] if ops is None else ops
     requested_groups = [] if skip_stack else resolve_groups(effective_web, effective_data, effective_postgres, effective_ops)
-    stack_plan = build_stack_plan(requested_groups) if requested_groups else None
+    try:
+        stack_plan = build_stack_plan(requested_groups) if requested_groups else None
+    except StackServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
     source_path = source.resolve()
 
     app_plan = None
@@ -292,6 +296,8 @@ def init(
         config_path=str(config_path),
         stack_groups=requested_groups,
         group_defaults=default_groups,
+        stack_platform=stack_plan.platform.label if stack_plan else None,
+        stack_platform_support=stack_plan.platform.support_level if stack_plan else None,
         stack_commands=stack_plan.commands if stack_plan else [],
         app_plan=app_plan,
         apply=apply,

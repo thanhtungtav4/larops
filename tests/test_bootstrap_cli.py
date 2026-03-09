@@ -8,6 +8,12 @@ from larops.cli import app
 runner = CliRunner()
 
 
+def linux_env(tmp_path: Path) -> dict[str, str]:
+    os_release = tmp_path / "os-release"
+    os_release.write_text('ID="ubuntu"\nVERSION_ID="24.04"\n', encoding="utf-8")
+    return {"LAROPS_STACK_OS_RELEASE_PATH": str(os_release)}
+
+
 def write_config(tmp_path: Path) -> Path:
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(
@@ -41,6 +47,7 @@ def test_bootstrap_small_vps_profile_skips_data_stack_by_default(tmp_path: Path)
     result = runner.invoke(
         app,
         ["--config", str(config), "--json", "bootstrap", "init", "--profile", "small-vps"],
+        env=linux_env(tmp_path),
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[0])
@@ -54,6 +61,7 @@ def test_bootstrap_small_vps_profile_allows_explicit_data_override(tmp_path: Pat
     result = runner.invoke(
         app,
         ["--config", str(config), "--json", "bootstrap", "init", "--profile", "small-vps", "--data"],
+        env=linux_env(tmp_path),
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[0])

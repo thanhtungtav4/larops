@@ -31,6 +31,7 @@ larops create site example.com --apply
 1. Start with [README.en.md](README.en.md) if your team operates primarily in English.
 2. Start with [README.vi.md](README.vi.md) if you want the same workflow explained in Vietnamese.
 3. Use [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md) for production-oriented checklists and command sequences.
+4. Use [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md) before targeting a new distro.
 
 ## Core Principles
 
@@ -51,4 +52,5 @@ larops create site example.com --apply
 - English manual: [README.en.md](README.en.md)
 - Vietnamese manual: [README.vi.md](README.vi.md)
 - Production runbook: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
+- OS support matrix: [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
