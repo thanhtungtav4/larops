@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from larops.core.shell import ShellCommandError, run_command
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 from larops.services.stack_service import StackServiceError, detect_stack_platform
 
 
@@ -232,34 +233,11 @@ def _restore_file(path: Path, previous: str | None) -> None:
     path.write_text(previous, encoding="utf-8")
 
 
-def _detect_selinux_mode() -> str:
-    try:
-        completed = run_command(["getenforce"], check=False)
-    except FileNotFoundError:
-        return "disabled"
-    mode = (completed.stdout or completed.stderr or "").strip().lower()
-    if mode in {"enforcing", "permissive", "disabled"}:
-        return mode
-    return "disabled"
-
-
 def _relabel_managed_paths_for_selinux(paths: list[Path]) -> dict[str, Any]:
-    mode = _detect_selinux_mode()
-    if mode == "disabled":
-        return {"mode": mode, "relabelled_paths": []}
-
-    restorecon_bin = shutil.which("restorecon")
-    if not restorecon_bin:
-        raise SecureServiceError("SELinux is active but restorecon is not available.")
-
-    relabelled_paths: list[str] = []
-    for path in dict.fromkeys(paths):
-        try:
-            run_command([restorecon_bin, "-F", str(path)], check=True)
-        except (ShellCommandError, FileNotFoundError) as exc:
-            raise SecureServiceError(str(exc)) from exc
-        relabelled_paths.append(str(path))
-    return {"mode": mode, "relabelled_paths": relabelled_paths}
+    try:
+        return relabel_managed_paths_for_selinux(paths, run_command=run_command, which=shutil.which)
+    except SelinuxServiceError as exc:
+        raise SecureServiceError(str(exc)) from exc
 
 
 def render_sshd_drop_in(
@@ -375,7 +353,7 @@ def apply_secure_ssh(
         if reload_after_validate:
             reloaded_service = _resolve_reload_service(reload_service, ["ssh", "sshd"])
             run_command(["systemctl", "reload", reloaded_service], check=True)
-    except (ShellCommandError, FileNotFoundError) as exc:
+    except (SecureServiceError, ShellCommandError, FileNotFoundError) as exc:
         _restore_file(sshd_drop_in_file, previous)
         raise SecureServiceError(str(exc)) from exc
 

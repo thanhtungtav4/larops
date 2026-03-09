@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from collections import Counter, deque
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Any
 from larops.core.shell import run_command
 from larops.services.app_lifecycle import list_registered_apps
 from larops.services.secure_service import nginx_root_include_status, resolve_nginx_hardening_paths
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 from larops.services.stack_service import StackServiceError, detect_stack_platform
 from larops.services.monitor_systemd import (
     status_monitor_app_timer,
@@ -59,6 +61,64 @@ def _normalize_ufw_logging(level: str) -> str:
     if normalized in {"off", "on", "low", "medium", "high", "full"}:
         return normalized
     return "low"
+
+
+def _parse_sshd_port_from_jail(fail2ban_jail_path: Path) -> int:
+    if fail2ban_jail_path.exists() and fail2ban_jail_path.is_file():
+        try:
+            body = fail2ban_jail_path.read_text(encoding="utf-8")
+        except OSError:
+            body = ""
+        matched = re.search(r"^\s*port\s*=\s*(\d+)\s*$", body, flags=re.MULTILINE)
+        if matched:
+            try:
+                parsed = int(matched.group(1))
+            except ValueError:
+                parsed = 22
+            if 1 <= parsed <= 65535:
+                return parsed
+    return 22
+
+
+def _parse_firewalld_active_zones(output: str) -> list[str]:
+    zones: list[str] = []
+    for raw_line in output.splitlines():
+        if not raw_line.strip():
+            continue
+        if raw_line.startswith((" ", "\t")):
+            continue
+        zone = raw_line.strip()
+        if ":" in zone:
+            continue
+        zones.append(zone)
+    return list(dict.fromkeys(zones))
+
+
+def _parse_firewalld_tokens(output: str) -> set[str]:
+    return {token.strip() for token in output.split() if token.strip()}
+
+
+def _collect_firewalld_zone_report(zone: str, *, ssh_port: int) -> dict[str, Any]:
+    services_result = run_command(["firewall-cmd", "--zone", zone, "--list-services"], check=False)
+    ports_result = run_command(["firewall-cmd", "--zone", zone, "--list-ports"], check=False)
+    services = _parse_firewalld_tokens((services_result.stdout or services_result.stderr or "").strip())
+    ports = _parse_firewalld_tokens((ports_result.stdout or ports_result.stderr or "").strip())
+    required_services = {"http", "https"}
+    required_ports = {f"{ssh_port}/tcp"}
+    return {
+        "zone": zone,
+        "services": sorted(services),
+        "ports": sorted(ports),
+        "required_services": sorted(required_services),
+        "required_ports": sorted(required_ports),
+        "missing_services": sorted(required_services - services),
+        "missing_ports": sorted(required_ports - ports),
+        "exit_code": max(services_result.returncode, ports_result.returncode),
+        "rules_ok": services_result.returncode == 0
+        and ports_result.returncode == 0
+        and required_services.issubset(services)
+        and required_ports.issubset(ports),
+    }
 
 
 def render_fail2ban_jail(
@@ -196,12 +256,18 @@ def apply_security_install_plan(plan: SecurityInstallPlan) -> dict[str, Any]:
     plan.fail2ban_filter_path.write_text(plan.fail2ban_filter_body, encoding="utf-8")
 
     try:
+        relabel_managed_paths_for_selinux(
+            [plan.fail2ban_jail_path, plan.fail2ban_filter_path],
+            run_command=run_command,
+            which=shutil.which,
+            roots=[Path("/etc")],
+        )
         for command in plan.firewall_commands:
             run_command(command, check=True)
 
         run_command(["systemctl", "enable", "--now", plan.fail2ban_service], check=True)
         run_command(["systemctl", "restart", plan.fail2ban_service], check=True)
-    except Exception:
+    except (Exception, SelinuxServiceError):
         if previous_jail is None:
             plan.fail2ban_jail_path.unlink(missing_ok=True)
         else:
@@ -240,15 +306,34 @@ def collect_security_status(
             "exit_code": firewall_status.returncode,
         }
     elif platform.family == "el9":
+        ssh_port = _parse_sshd_port_from_jail(fail2ban_jail_path)
         firewalld_active = run_command(["systemctl", "is-active", "firewalld"], check=False)
         firewalld_enabled = run_command(["systemctl", "is-enabled", "firewalld"], check=False)
         firewalld_state = run_command(["firewall-cmd", "--state"], check=False)
+        active_zones_result = run_command(["firewall-cmd", "--get-active-zones"], check=False)
+        default_zone_result = run_command(["firewall-cmd", "--get-default-zone"], check=False)
+        active_zones = _parse_firewalld_active_zones((active_zones_result.stdout or active_zones_result.stderr or "").strip())
+        default_zone = (default_zone_result.stdout or default_zone_result.stderr or "").strip()
+        effective_zones = active_zones or ([default_zone] if default_zone else [])
+        zone_reports = [_collect_firewalld_zone_report(zone, ssh_port=ssh_port) for zone in effective_zones]
         firewall_report = {
             "backend": "firewalld",
             "active": (firewalld_active.stdout or firewalld_active.stderr or "").strip(),
             "enabled": (firewalld_enabled.stdout or firewalld_enabled.stderr or "").strip(),
             "state": (firewalld_state.stdout or firewalld_state.stderr or "").strip(),
-            "exit_code": max(firewalld_active.returncode, firewalld_enabled.returncode, firewalld_state.returncode),
+            "ssh_port": ssh_port,
+            "default_zone": default_zone,
+            "active_zones": active_zones,
+            "effective_zones": effective_zones,
+            "zones": zone_reports,
+            "exit_code": max(
+                firewalld_active.returncode,
+                firewalld_enabled.returncode,
+                firewalld_state.returncode,
+                active_zones_result.returncode,
+                default_zone_result.returncode,
+                *(zone_report["exit_code"] for zone_report in zone_reports),
+            ),
         }
     else:
         raise SecurityServiceError(f"Unsupported security platform family: {platform.family}")
@@ -292,6 +377,12 @@ def determine_security_status_level(report: dict[str, Any]) -> str:
         if str(firewall.get("enabled", "")).strip().lower() not in {"enabled", "static"}:
             return "error"
         if str(firewall.get("state", "")).strip().lower() != "running":
+            return "error"
+        effective_zones = firewall.get("effective_zones", [])
+        if not isinstance(effective_zones, list) or not effective_zones:
+            return "error"
+        zone_reports = firewall.get("zones", [])
+        if not isinstance(zone_reports, list) or any(not bool(item.get("rules_ok")) for item in zone_reports):
             return "error"
     else:
         return "error"

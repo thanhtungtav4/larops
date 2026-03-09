@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import re
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 
 from larops.core.shell import ShellCommandError, run_command
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 
 
 class DbAutoBackupError(RuntimeError):
@@ -105,6 +107,18 @@ def _validate_timer_inputs(*, on_calendar: str, randomized_delay_seconds: int) -
         raise DbAutoBackupError("--randomized-delay must be >= 0.")
 
 
+def _relabel_systemd_units(paths: list[Path]) -> None:
+    try:
+        relabel_managed_paths_for_selinux(
+            paths,
+            run_command=run_command,
+            which=shutil.which,
+            roots=[Path("/etc/systemd/system"), Path("/usr/lib/systemd/system")],
+        )
+    except SelinuxServiceError as exc:
+        raise DbAutoBackupError(str(exc)) from exc
+
+
 def enable_db_backup_timer(
     *,
     unit_dir: Path,
@@ -160,6 +174,7 @@ def enable_db_backup_timer(
         ),
         encoding="utf-8",
     )
+    _relabel_systemd_units([service_path, timer_path])
 
     if systemd_manage:
         try:

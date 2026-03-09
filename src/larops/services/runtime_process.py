@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from larops.core.shell import ShellCommandError, run_command
 from larops.services.app_lifecycle import AppLifecycleError, get_app_paths, load_metadata
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 
 
 class RuntimeProcessError(RuntimeError):
@@ -265,6 +267,18 @@ def _unit_paths(unit_dir: Path, domain: str, process_type: str, options: dict[st
     return [unit_dir / name for name in _service_names(domain, process_type, options=options, spec=spec)]
 
 
+def _relabel_systemd_units(unit_paths: list[Path]) -> None:
+    try:
+        relabel_managed_paths_for_selinux(
+            unit_paths,
+            run_command=run_command,
+            which=shutil.which,
+            roots=[Path("/etc/systemd/system"), Path("/usr/lib/systemd/system")],
+        )
+    except SelinuxServiceError as exc:
+        raise RuntimeProcessError(str(exc)) from exc
+
+
 def enable_process(
     *,
     base_releases_path: Path,
@@ -317,6 +331,7 @@ def enable_process(
         unit = render_systemd_unit(domain, process_type, app_paths.current, options, user=service_user)
         unit_path.parent.mkdir(parents=True, exist_ok=True)
         unit_path.write_text(unit, encoding="utf-8")
+    _relabel_systemd_units(unit_paths)
 
     if systemd_manage:
         try:

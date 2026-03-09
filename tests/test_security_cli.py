@@ -442,6 +442,14 @@ def test_security_posture_ok_when_el9_default_dir_is_loaded_from_root_config(tmp
             return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
         if command[:2] == ["firewall-cmd", "--state"]:
             return CompletedProcess(command, 0, stdout="running\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--get-active-zones"]:
+            return CompletedProcess(command, 0, stdout="public\n  interfaces: eth0\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--get-default-zone"]:
+            return CompletedProcess(command, 0, stdout="public\n", stderr="")
+        if command[:4] == ["firewall-cmd", "--zone", "public", "--list-services"]:
+            return CompletedProcess(command, 0, stdout="http https ssh\n", stderr="")
+        if command[:4] == ["firewall-cmd", "--zone", "public", "--list-ports"]:
+            return CompletedProcess(command, 0, stdout="22/tcp\n", stderr="")
         if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
             return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
         if command[:3] == ["fail2ban-client", "status", "sshd"]:
@@ -766,6 +774,14 @@ def test_security_status_el9_uses_firewalld_state(tmp_path: Path, monkeypatch) -
             return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
         if command[:2] == ["firewall-cmd", "--state"]:
             return CompletedProcess(command, 0, stdout="running\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--get-active-zones"]:
+            return CompletedProcess(command, 0, stdout="public\n  interfaces: eth0\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--get-default-zone"]:
+            return CompletedProcess(command, 0, stdout="public\n", stderr="")
+        if command[:4] == ["firewall-cmd", "--zone", "public", "--list-services"]:
+            return CompletedProcess(command, 0, stdout="cockpit dhcpv6-client http https ssh\n", stderr="")
+        if command[:4] == ["firewall-cmd", "--zone", "public", "--list-ports"]:
+            return CompletedProcess(command, 0, stdout="22/tcp\n", stderr="")
         if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
             return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
         if command[:3] == ["fail2ban-client", "status", "sshd"]:
@@ -793,4 +809,63 @@ def test_security_status_el9_uses_firewalld_state(tmp_path: Path, monkeypatch) -
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["report"]["firewall"]["backend"] == "firewalld"
+    assert payload["report"]["firewall"]["effective_zones"] == ["public"]
+    assert payload["report"]["firewall"]["zones"][0]["rules_ok"] is True
     assert payload["status"] == "ok"
+
+
+def test_security_status_el9_errors_when_firewalld_zone_is_missing_required_rules(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    jail_file = tmp_path / "fail2ban" / "jail.d" / "larops.conf"
+    filter_file = tmp_path / "fail2ban" / "filter.d" / "larops-nginx-scan.conf"
+    jail_file.parent.mkdir(parents=True, exist_ok=True)
+    filter_file.parent.mkdir(parents=True, exist_ok=True)
+    jail_file.write_text("[sshd]\nenabled=true\nport = 2222\n[larops-nginx-scan]\nenabled=true\n", encoding="utf-8")
+    filter_file.write_text("[Definition]\nfailregex = test\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True) -> CompletedProcess[str]:
+        if command[:3] == ["systemctl", "is-active", "firewalld"]:
+            return CompletedProcess(command, 0, stdout="active\n", stderr="")
+        if command[:3] == ["systemctl", "is-enabled", "firewalld"]:
+            return CompletedProcess(command, 0, stdout="enabled\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--state"]:
+            return CompletedProcess(command, 0, stdout="running\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--get-active-zones"]:
+            return CompletedProcess(command, 0, stdout="public\n  interfaces: eth0\n", stderr="")
+        if command[:2] == ["firewall-cmd", "--get-default-zone"]:
+            return CompletedProcess(command, 0, stdout="public\n", stderr="")
+        if command[:4] == ["firewall-cmd", "--zone", "public", "--list-services"]:
+            return CompletedProcess(command, 0, stdout="http\n", stderr="")
+        if command[:4] == ["firewall-cmd", "--zone", "public", "--list-ports"]:
+            return CompletedProcess(command, 0, stdout="22/tcp\n", stderr="")
+        if command[:2] == ["fail2ban-client", "status"] and len(command) == 2:
+            return CompletedProcess(command, 0, stdout="Status\n|- Number of jail: 2\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "sshd"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: sshd\n", stderr="")
+        if command[:3] == ["fail2ban-client", "status", "larops-nginx-scan"]:
+            return CompletedProcess(command, 0, stdout="Status for the jail: larops-nginx-scan\n", stderr="")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.security_service.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "security",
+            "status",
+            "--fail2ban-jail-file",
+            str(jail_file),
+            "--fail2ban-filter-file",
+            str(filter_file),
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+    firewall = payload["report"]["firewall"]
+    assert firewall["ssh_port"] == 2222
+    assert firewall["zones"][0]["missing_services"] == ["https"]
+    assert firewall["zones"][0]["missing_ports"] == ["2222/tcp"]

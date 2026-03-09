@@ -10,6 +10,7 @@ import yaml
 from larops.core.shell import ShellCommandError, run_command
 from larops.services.host_layout_service import default_nginx_access_logs as default_host_nginx_access_logs
 from larops.services.host_layout_service import default_nginx_error_logs as default_host_nginx_error_logs
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 
 
 class ObservabilityLogsError(RuntimeError):
@@ -254,6 +255,18 @@ def _systemd_status(service: str) -> dict[str, Any]:
     }
 
 
+def _relabel_managed_system_paths(paths: list[Path]) -> None:
+    try:
+        relabel_managed_paths_for_selinux(
+            paths,
+            run_command=run_command,
+            which=shutil.which,
+            roots=[Path("/etc"), Path("/etc/systemd/system"), Path("/usr/lib/systemd/system")],
+        )
+    except SelinuxServiceError as exc:
+        raise ObservabilityLogsError(str(exc)) from exc
+
+
 def enable_logs_shipping(
     *,
     unit_dir: Path,
@@ -311,6 +324,7 @@ def enable_logs_shipping(
         ),
         encoding="utf-8",
     )
+    _relabel_managed_system_paths([config_file, unit_path])
 
     if systemd_manage:
         try:

@@ -166,6 +166,43 @@ def test_secure_ssh_el9_fails_fast_when_restorecon_is_missing(tmp_path: Path, mo
     assert "restorecon is not available" in result.stdout
 
 
+def test_secure_ssh_el9_restores_previous_drop_in_when_restorecon_is_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    sshd_drop_in = tmp_path / "ssh" / "sshd_config.d" / "larops.conf"
+    sshd_config = tmp_path / "ssh" / "sshd_config"
+    sshd_config.parent.mkdir(parents=True, exist_ok=True)
+    sshd_config.write_text("Include sshd_config.d/*.conf\n", encoding="utf-8")
+    sshd_drop_in.parent.mkdir(parents=True, exist_ok=True)
+    sshd_drop_in.write_text("# old\nPermitRootLogin yes\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Enforcing\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.secure_service.run_command", fake_run_command)
+    monkeypatch.setattr("larops.services.secure_service.shutil.which", lambda name: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "secure",
+            "ssh",
+            "--sshd-drop-in-file",
+            str(sshd_drop_in),
+            "--sshd-config-file",
+            str(sshd_config),
+            "--no-reload",
+            "--apply",
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 2
+    assert sshd_drop_in.read_text(encoding="utf-8") == "# old\nPermitRootLogin yes\n"
+
+
 def test_secure_ssh_rejects_whitespace_in_allow_user(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     sshd_drop_in = tmp_path / "ssh" / "sshd_config.d" / "larops.conf"

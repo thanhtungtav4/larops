@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 
 from larops.core.shell import ShellCommandError, run_command
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 
 
 class SslAutoRenewError(RuntimeError):
@@ -93,6 +95,18 @@ def _systemd_unit_known(unit: str) -> bool:
     return status["active"] not in {"unknown", "not-found", ""} or status["enabled"] not in {"unknown", "not-found", ""}
 
 
+def _relabel_systemd_units(paths: list[Path]) -> None:
+    try:
+        relabel_managed_paths_for_selinux(
+            paths,
+            run_command=run_command,
+            which=shutil.which,
+            roots=[Path("/etc/systemd/system"), Path("/usr/lib/systemd/system")],
+        )
+    except SelinuxServiceError as exc:
+        raise SslAutoRenewError(str(exc)) from exc
+
+
 def enable_ssl_auto_renew(
     *,
     unit_dir: Path,
@@ -121,6 +135,7 @@ def enable_ssl_auto_renew(
         ),
         encoding="utf-8",
     )
+    _relabel_systemd_units([service_path, timer_path])
 
     if systemd_manage:
         try:
