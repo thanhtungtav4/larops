@@ -73,9 +73,11 @@ def install(
 
     try:
         with CommandLock("stack-install"):
-            apply_stack_plan(plan)
-            for command in plan.commands:
-                app_ctx.emit_output("ok", f"Executed: {' '.join(command)}")
+            apply_stack_plan(
+                plan,
+                on_command_start=lambda command: app_ctx.emit_output("ok", f"Running: {' '.join(command)}"),
+                on_command_complete=lambda command: app_ctx.emit_output("ok", f"Executed: {' '.join(command)}"),
+            )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc

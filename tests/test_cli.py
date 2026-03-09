@@ -67,6 +67,22 @@ def test_stack_install_json_mode_and_event_file(tmp_path: Path) -> None:
     assert len(event_lines) >= 1
 
 
+def test_stack_install_apply_emits_running_and_executed(monkeypatch, tmp_path: Path) -> None:
+    def fake_apply_stack_plan(plan, *, on_command_start=None, on_command_complete=None):
+        for command in plan.commands:
+            if on_command_start is not None:
+                on_command_start(command)
+            if on_command_complete is not None:
+                on_command_complete(command)
+
+    monkeypatch.setattr("larops.commands.stack.apply_stack_plan", fake_apply_stack_plan)
+    result = runner.invoke(app, ["stack", "install", "--web", "--apply"], env=linux_env(tmp_path))
+    assert result.exit_code == 0
+    assert "Running: apt-get update" in result.stdout
+    assert "Executed: apt-get update" in result.stdout
+    assert "Stack installation completed." in result.stdout
+
+
 def test_cli_fails_fast_on_missing_telegram_secret(tmp_path: Path) -> None:
     config = tmp_path / "larops.yaml"
     config.write_text("environment: test\n", encoding="utf-8")

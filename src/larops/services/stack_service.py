@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 
 from larops.core.shell import run_command
 
@@ -283,6 +283,15 @@ def build_stack_plan(
     )
 
 
-def apply_stack_plan(plan: StackPlan) -> None:
+def apply_stack_plan(
+    plan: StackPlan,
+    *,
+    on_command_start: Callable[[list[str]], None] | None = None,
+    on_command_complete: Callable[[list[str]], None] | None = None,
+) -> None:
     for command in plan.commands:
+        if on_command_start is not None:
+            on_command_start(command)
         run_command(command, check=True)
+        if on_command_complete is not None:
+            on_command_complete(command)
