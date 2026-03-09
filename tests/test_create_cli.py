@@ -5,6 +5,7 @@ from subprocess import CompletedProcess
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.commands.create import _resolve_app_bootstrap_strategy
 from larops.services.nginx_site_service import NginxSiteServiceError
 from larops.services.ssl_service import SslServiceError
 
@@ -270,10 +271,10 @@ def test_create_site_apply_bootstraps_laravel_artisan_after_deploy(tmp_path: Pat
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"]
     assert len(bootstrap) == 1
-    assert bootstrap[0][0] == "php artisan key:generate --force"
-    assert "php artisan package:discover --ansi" in bootstrap[0]
-    assert "php artisan migrate --force" in bootstrap[0]
+    assert bootstrap[0][0] == "php artisan migrate --force"
+    assert bootstrap[0][1] == "php artisan package:discover --ansi"
     assert "php artisan optimize" in bootstrap[0]
+    assert "APP_KEY=" in (tmp_path / "apps" / "demo.test" / "shared" / ".env").read_text(encoding="utf-8")
     assert "app bootstrap: completed" in result.stdout
 
 
@@ -296,7 +297,178 @@ def test_create_site_apply_skips_key_generate_when_app_key_exists(tmp_path: Path
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
     assert "php artisan key:generate --force" not in bootstrap
-    assert bootstrap[0] == "php artisan package:discover --ansi"
+    assert bootstrap[0] == "php artisan migrate --force"
+    assert bootstrap[1] == "php artisan package:discover --ansi"
+
+
+def test_create_site_apply_runs_bootstrap_before_post_activate_when_cache_warm_enabled(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "  health_check_path: /up\n",
+            "  health_check_path: /up\n  cache_warm_enabled: true\n",
+        ),
+        encoding="utf-8",
+    )
+    _ = make_source(tmp_path, "demo.test")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    phases = [phase for phase, _commands in phase_calls]
+    assert phases.index("app-bootstrap") < phases.index("post-activate")
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    post_activate = [commands for phase, commands in phase_calls if phase == "post-activate"][0]
+    assert "php artisan migrate --force" in bootstrap
+    assert "php artisan optimize" in bootstrap
+    assert "php artisan config:cache" not in post_activate
+    assert "php artisan route:cache" not in post_activate
+    assert "php artisan view:cache" not in post_activate
+    assert "php artisan event:cache" not in post_activate
+    assert post_activate == []
+
+
+def test_create_site_apply_dedupes_framework_post_activate_work_but_keeps_custom_commands(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "  health_check_path: /up\n",
+            "\n".join(
+                [
+                    "  health_check_path: /up",
+                    "  migrate_enabled: true",
+                    "  cache_warm_enabled: true",
+                    "  post_activate_commands:",
+                    "    - echo custom-post",
+                    "",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+    _ = make_source(tmp_path, "demo.test")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    post_activate = [commands for phase, commands in phase_calls if phase == "post-activate"][0]
+    assert bootstrap.count("php artisan migrate --force") == 1
+    assert "php artisan migrate --force" not in post_activate
+    assert "php artisan config:cache" not in post_activate
+    assert "echo custom-post" in post_activate
+
+
+def test_resolve_app_bootstrap_strategy_auto_skips_when_database_is_empty(monkeypatch, tmp_path: Path) -> None:
+    current_path = tmp_path / "current"
+    current_path.mkdir(parents=True, exist_ok=True)
+    (current_path / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+    credential_file = tmp_path / "db.cnf"
+    credential_file.write_text("[client]\n", encoding="utf-8")
+    monkeypatch.setattr("larops.commands.create.count_database_tables", lambda **_kwargs: 0)
+
+    strategy = _resolve_app_bootstrap_strategy(
+        requested_mode="auto",
+        current_path=current_path,
+        database_provision={
+            "engine": "mysql",
+            "database": "demo",
+            "credential_file": str(credential_file),
+        },
+    )
+
+    assert strategy["mode"] == "skip"
+    assert strategy["reason"] == "database-empty"
+    assert strategy["table_count"] == 0
+
+
+def test_resolve_app_bootstrap_strategy_auto_eager_when_database_has_tables(monkeypatch, tmp_path: Path) -> None:
+    current_path = tmp_path / "current"
+    current_path.mkdir(parents=True, exist_ok=True)
+    (current_path / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+    credential_file = tmp_path / "db.cnf"
+    credential_file.write_text("[client]\n", encoding="utf-8")
+    monkeypatch.setattr("larops.commands.create.count_database_tables", lambda **_kwargs: 4)
+
+    strategy = _resolve_app_bootstrap_strategy(
+        requested_mode="auto",
+        current_path=current_path,
+        database_provision={
+            "engine": "mysql",
+            "database": "demo",
+            "credential_file": str(credential_file),
+        },
+    )
+
+    assert strategy["mode"] == "eager"
+    assert strategy["reason"] == "database-has-tables"
+    assert strategy["table_count"] == 4
+
+
+def test_create_site_apply_skip_bootstrap_mode_avoids_framework_boot_commands(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "  health_check_path: /up\n",
+            "\n".join(
+                [
+                    "  health_check_path: /up",
+                    "  migrate_enabled: true",
+                    "  cache_warm_enabled: true",
+                    "  post_activate_commands:",
+                    "    - echo custom-post",
+                    "",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+    _ = make_source(tmp_path, "demo.test")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--app-bootstrap-mode",
+            "skip",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    post_activate = [commands for phase, commands in phase_calls if phase == "post-activate"][0]
+    assert bootstrap == []
+    assert post_activate == ["echo custom-post"]
+    assert "app bootstrap: skipped (explicit-skip)" in result.stdout
 
 
 def test_create_site_apply_skips_app_bootstrap_when_artisan_is_missing(tmp_path: Path, monkeypatch) -> None:

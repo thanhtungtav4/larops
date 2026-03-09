@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
@@ -38,6 +39,7 @@ from larops.services.env_file_service import (
 )
 from larops.services.db_service import (
     DbServiceError,
+    count_database_tables,
     default_credential_file,
     default_password_file,
     deprovision_database,
@@ -53,6 +55,7 @@ from larops.services.release_service import (
     resolve_build_commands_for_release,
     run_http_health_check,
     run_release_commands,
+    validate_frontend_build_requirements_for_release,
     write_release_manifest,
 )
 from larops.services.runtime_process import RuntimeProcessError, enable_process
@@ -95,6 +98,7 @@ _CACHE_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 _LARAVEL_SOURCE_BOOTSTRAP_TYPES = {"laravel", "queue", "horizon"}
+_APP_BOOTSTRAP_MODES = {"auto", "eager", "skip"}
 
 
 def _lock_name(domain: str) -> str:
@@ -135,6 +139,7 @@ def _emit_create_site_summary(
     db_result: dict | None,
     env_sync_result: dict | None,
     bootstrap_reports: list[dict[str, Any]],
+    bootstrap_status: str | None,
     permissions_result: dict[str, Any] | None,
 ) -> None:
     if app_ctx.json_output:
@@ -176,8 +181,8 @@ def _emit_create_site_summary(
     if permissions_result is not None:
         owner_group = "applied" if permissions_result.get("owner_group_applied") else "skipped"
         lines.append(f"  writable permissions: {permissions_result['writable_mode']} ({owner_group})")
-    if bootstrap_reports:
-        lines.append("  app bootstrap: completed")
+    if bootstrap_status is not None:
+        lines.append(f"  app bootstrap: {bootstrap_status}")
     for line in lines:
         app_ctx.emit_output("ok", line)
 
@@ -195,21 +200,94 @@ def _shared_env_has_app_key(env_file: Path) -> bool:
     return False
 
 
-def _resolve_bootstrap_app_commands(*, site_profile: dict[str, Any], current_path: Path, shared_env_file: Path) -> list[str]:
+def _generate_app_key() -> str:
+    return "base64:" + base64.b64encode(os.urandom(32)).decode("ascii")
+
+
+def _ensure_shared_app_key(env_file: Path) -> dict[str, Any] | None:
+    if _shared_env_has_app_key(env_file):
+        return None
+    return upsert_env_values(env_file=env_file, updates={"APP_KEY": _generate_app_key()})
+
+
+def _normalize_app_bootstrap_mode(raw_mode: str) -> str:
+    mode = raw_mode.strip().lower()
+    if mode not in _APP_BOOTSTRAP_MODES:
+        raise RuntimeProcessError(
+            f"Unsupported app bootstrap mode: {raw_mode}. Expected one of: auto, eager, skip."
+        )
+    return mode
+
+
+def _resolve_app_bootstrap_strategy(
+    *,
+    requested_mode: str,
+    current_path: Path,
+    database_provision: dict[str, Any] | None,
+) -> dict[str, Any]:
+    mode = _normalize_app_bootstrap_mode(requested_mode)
     if not (current_path / "artisan").exists():
+        return {"mode": "skip", "reason": "no-artisan", "table_count": None}
+    if mode in {"eager", "skip"}:
+        return {"mode": mode, "reason": f"explicit-{mode}", "table_count": None}
+    if database_provision is None:
+        return {"mode": "eager", "reason": "no-db-context", "table_count": None}
+
+    credential_file_raw = str(database_provision.get("credential_file", "")).strip()
+    database = str(database_provision.get("database", "")).strip()
+    engine = str(database_provision.get("engine", "")).strip()
+    if not credential_file_raw or not database or not engine:
+        return {"mode": "skip", "reason": "missing-db-inspection-context", "table_count": None}
+
+    try:
+        table_count = count_database_tables(
+            engine=engine,
+            database=database,
+            credential_file=Path(credential_file_raw),
+        )
+    except DbServiceError:
+        return {"mode": "skip", "reason": "db-inspection-failed", "table_count": None}
+
+    if table_count > 0:
+        return {"mode": "eager", "reason": "database-has-tables", "table_count": table_count}
+    return {"mode": "skip", "reason": "database-empty", "table_count": 0}
+
+
+def _resolve_bootstrap_app_commands(*, current_path: Path, shared_env_file: Path, bootstrap_mode: str) -> list[str]:
+    if not (current_path / "artisan").exists():
+        return []
+    if bootstrap_mode != "eager":
         return []
     commands: list[str] = []
     if not _shared_env_has_app_key(shared_env_file):
         commands.append("php artisan key:generate --force")
     commands.extend(
         [
-            "php artisan package:discover --ansi",
             "php artisan migrate --force",
+            "php artisan package:discover --ansi",
             "php artisan optimize:clear",
             "php artisan optimize",
         ]
     )
     return commands
+
+
+def _effective_create_post_activate_commands(
+    *,
+    deploy_config,
+    bootstrap_mode: str,
+    bootstrap_commands: list[str],
+    post_activate_commands: list[str],
+) -> list[str]:
+    if not bootstrap_commands and bootstrap_mode == "eager":
+        return list(post_activate_commands)
+    skip_commands: set[str] = set()
+    migrate_phase = deploy_config.migrate_phase.strip().lower()
+    if deploy_config.migrate_enabled and migrate_phase == "post-activate":
+        skip_commands.add(deploy_config.migrate_command.strip())
+    if deploy_config.cache_warm_enabled and (bootstrap_mode != "eager" or "php artisan optimize" in bootstrap_commands):
+        skip_commands.update(command.strip() for command in deploy_config.cache_warm_commands if command.strip())
+    return [command for command in post_activate_commands if command.strip() not in skip_commands]
 
 
 def _preserved_site_metadata(paths: Any) -> dict[str, Any]:
@@ -943,6 +1021,11 @@ def create_site(
         "--atomic",
         help="Rollback created artifacts automatically when create flow fails.",
     ),
+    app_bootstrap_mode: str = typer.Option(
+        "auto",
+        "--app-bootstrap-mode",
+        help="Laravel first-create bootstrap mode: auto, eager, or skip.",
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing app metadata."),
     apply: bool = typer.Option(False, "--apply", "-a", help="Apply create site workflow."),
 ) -> None:
@@ -959,6 +1042,11 @@ def create_site(
             php=php,
             ssl=ssl,
         )
+    except RuntimeProcessError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+    try:
+        app_bootstrap_mode = _normalize_app_bootstrap_mode(app_bootstrap_mode)
     except RuntimeProcessError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
@@ -1119,6 +1207,7 @@ def create_site(
     db_result: dict | None = None
     env_sync_result: dict | None = None
     bootstrap_reports: list[dict[str, Any]] = []
+    bootstrap_status: str | None = None
     db_provisioned = False
     db_password_value: str | None = None
     existing_cert_file = default_cert_file(domain)
@@ -1215,6 +1304,10 @@ def create_site(
                     release_dir=release_dir,
                     commands=phase_commands["build"],
                 )
+                validate_frontend_build_requirements_for_release(
+                    release_dir=release_dir,
+                    commands=phase_commands["build"],
+                )
                 if db_result is not None:
                     env_sync_result = upsert_env_values(
                         env_file=paths.shared / ".env",
@@ -1251,21 +1344,50 @@ def create_site(
                     owner=app_ctx.config.systemd.user,
                     group=app_ctx.config.systemd.user,
                 )
-                post_activate_reports = run_release_commands(
-                    workdir=current_path,
-                    phase="post-activate",
-                    commands=phase_commands["post_activate"],
-                    timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
+                bootstrap_strategy = _resolve_app_bootstrap_strategy(
+                    requested_mode=app_bootstrap_mode,
+                    current_path=current_path,
+                    database_provision=db_result,
                 )
+                app_key_sync = _ensure_shared_app_key(paths.shared / ".env")
+                if app_key_sync is not None:
+                    env_sync_result = app_key_sync if env_sync_result is None else env_sync_result
                 bootstrap_commands = _resolve_bootstrap_app_commands(
-                    site_profile=site_profile,
                     current_path=current_path,
                     shared_env_file=paths.shared / ".env",
+                    bootstrap_mode=str(bootstrap_strategy["mode"]),
                 )
                 bootstrap_reports = run_release_commands(
                     workdir=current_path,
                     phase="app-bootstrap",
                     commands=bootstrap_commands,
+                    timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
+                )
+                if bootstrap_reports:
+                    bootstrap_status = "completed"
+                else:
+                    bootstrap_status = f"skipped ({bootstrap_strategy['reason']})"
+                    if (current_path / "artisan").exists():
+                        app_ctx.emit_output(
+                            "warn",
+                            "App bootstrap was skipped to avoid booting Laravel against an empty or unknown schema. "
+                            "Use --app-bootstrap-mode eager if the app is known-safe, or run migrations/bootstrap "
+                            "manually after schema setup.",
+                            domain=domain,
+                            bootstrap_mode=bootstrap_strategy["mode"],
+                            bootstrap_reason=bootstrap_strategy["reason"],
+                            bootstrap_table_count=bootstrap_strategy.get("table_count"),
+                        )
+                post_activate_commands = _effective_create_post_activate_commands(
+                    deploy_config=app_ctx.config.deploy,
+                    bootstrap_mode=str(bootstrap_strategy["mode"]),
+                    bootstrap_commands=bootstrap_commands,
+                    post_activate_commands=phase_commands["post_activate"],
+                )
+                post_activate_reports = run_release_commands(
+                    workdir=current_path,
+                    phase="post-activate",
+                    commands=post_activate_commands,
                     timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
                 )
                 health_check = run_http_health_check(
@@ -1452,5 +1574,6 @@ def create_site(
         db_result=db_result,
         env_sync_result=env_sync_result,
         bootstrap_reports=bootstrap_reports,
+        bootstrap_status=bootstrap_status,
         permissions_result=permissions_result,
     )

@@ -172,16 +172,16 @@ What `create site` does on a fresh host:
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
+- The default frontend auto-build path currently assumes an npm-managed project and preflights `package.json -> engines.node` against the host Node runtime.
 - Composer build install runs with `--no-scripts`; Laravel package discovery is deferred to the app bootstrap phase after `.env` and release symlinks are ready.
 - Use the same `--php` value on host bootstrap and site create so Nginx/FPM matches the installed PHP runtime.
 - On Ubuntu and Debian, LarOps auto-prepares the matching external PHP repository when the pinned version is newer than the distro default.
 - If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
-- When the deployed source contains `artisan`, `create site` also auto-runs the first app bootstrap after deploy:
-  - `php artisan key:generate --force` only when `APP_KEY` is missing
-  - `php artisan package:discover --ansi`
-  - `php artisan migrate --force`
-  - `php artisan optimize:clear`
-  - `php artisan optimize`
+- When the deployed source contains `artisan`, `create site` defaults to `--app-bootstrap-mode auto`:
+  - it writes `APP_KEY` directly into `shared/.env` when missing
+  - it only runs `migrate`, `package:discover`, and `optimize*` if the app database already appears to have schema
+  - use `--app-bootstrap-mode eager` for apps known to boot safely on first create
+  - use `--app-bootstrap-mode skip` when provider boot depends on schema or seeded settings
 - `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
 

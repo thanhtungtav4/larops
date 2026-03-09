@@ -765,6 +765,33 @@ def deprovision_database(
     }
 
 
+def count_database_tables(*, engine: str, database: str, credential_file: Path) -> int:
+    normalized_engine = normalize_db_engine(engine)
+    if not credential_file.exists():
+        raise DbServiceError(f"Credential file not found: {credential_file}")
+
+    if normalized_engine == "mysql":
+        sql = (
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_schema = '{normalize_database_name(database)}';"
+        )
+        try:
+            return _mysql_scalar_query(credential_file=credential_file, sql=sql)
+        except ShellCommandError as exc:
+            raise DbServiceError(str(exc)) from exc
+
+    db_name = normalize_database_name(database)
+    sql = (
+        "SELECT COUNT(*) FROM information_schema.tables "
+        f"WHERE table_catalog = '{db_name}' "
+        "AND table_schema NOT IN ('pg_catalog', 'information_schema');"
+    )
+    try:
+        return _postgres_scalar_query(credential_file=credential_file, database=db_name, sql=sql)
+    except ShellCommandError as exc:
+        raise DbServiceError(str(exc)) from exc
+
+
 def restore_verify_backup(
     *,
     backup_file: Path,

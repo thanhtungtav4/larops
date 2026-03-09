@@ -191,16 +191,16 @@ larops create site example.com \
 - Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
 - Nếu release có `composer.json` nhưng chưa có `vendor/autoload.php`, LarOps sẽ tự chạy `composer install` ở build phase.
 - Nếu release có `package.json`, có `vite.config.*`, và chưa có `public/build/manifest.json`, LarOps sẽ tự chạy `npm ci|install` và `npm run build` ở build phase.
+- Đường auto-build frontend mặc định hiện giả định app dùng npm và sẽ preflight `package.json -> engines.node` với Node runtime đang có trên host.
 - Composer ở build phase chạy với `--no-scripts`; phần Laravel package discovery được dời sang bootstrap app sau khi `.env` và symlink release đã sẵn sàng.
 - Nên dùng cùng giá trị `--php` ở bước bootstrap host và create site để Nginx/FPM khớp đúng runtime đã cài.
 - Trên Ubuntu và Debian, LarOps sẽ tự chuẩn bị external PHP repository tương ứng khi version pin mới hơn mặc định của distro.
 - Nếu có `--with-db`, LarOps sẽ provision database/user của ứng dụng và ghi credential/password file trước khi deploy.
-- Khi source được deploy có file `artisan`, `create site` còn tự chạy bootstrap app sau deploy:
-  - `php artisan key:generate --force` chỉ khi `APP_KEY` còn thiếu
-  - `php artisan package:discover --ansi`
-  - `php artisan migrate --force`
-  - `php artisan optimize:clear`
-  - `php artisan optimize`
+- Khi source được deploy có file `artisan`, `create site` mặc định dùng `--app-bootstrap-mode auto`:
+  - tự ghi `APP_KEY` trực tiếp vào `shared/.env` nếu còn thiếu
+  - chỉ chạy `migrate`, `package:discover`, và `optimize*` khi database của app có vẻ đã có schema
+  - dùng `--app-bootstrap-mode eager` cho app bạn biết chắc boot an toàn ngay từ lần create đầu
+  - dùng `--app-bootstrap-mode skip` nếu provider boot phụ thuộc schema hoặc dữ liệu seed ban đầu
 - `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
 

@@ -269,6 +269,7 @@ Meaning:
   - a `vite.config.*` file exists
   - `public/build/manifest.json` is missing
 - The host still needs Node.js/npm in the web stack.
+- Current auto-build is intentionally limited to npm-managed projects. If the app uses `pnpm`, `yarn`, `bun`, or a custom wrapper build flow, configure `deploy.asset_commands` explicitly instead of relying on the default auto-build path.
 
 Fix:
 
@@ -281,19 +282,20 @@ If the app targets PHP 8.3 instead, use `--php 8.3` or omit `--php`.
 
 If you intentionally commit built assets to the repository, LarOps will skip the auto-build path as long as `public/build/manifest.json` already exists in the release.
 
+If LarOps reports that the installed Node version does not satisfy `package.json -> engines.node`, install a compatible Node runtime on the host or move the frontend build into explicit `deploy.asset_commands`.
+
 ## Do I still need to run `php artisan key:generate` and `migrate` manually?
 
-Usually no for a fresh `create site` run when the deployed source contains `artisan`.
+Usually no, but the exact behavior now depends on the app bootstrap mode.
 
 Current LarOps behavior:
 
 - auto-runs `composer install --no-scripts` when the release is missing `vendor/autoload.php`
-- auto-runs Laravel bootstrap after deploy:
-  - `key:generate` only when `APP_KEY` is missing
-  - `package:discover --ansi`
-  - `migrate --force`
-  - `optimize:clear`
-  - `optimize`
+- defaults to `--app-bootstrap-mode auto` on `create site`:
+  - write `APP_KEY` directly into `shared/.env` when missing
+  - run `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema
+  - use `--app-bootstrap-mode eager` when the app is known-safe to boot on a fresh schema
+  - use `--app-bootstrap-mode skip` when provider boot depends on schema or seed data
 - auto-creates the standard shared Laravel runtime directories:
   - `storage/framework/cache/data`
   - `storage/framework/sessions`

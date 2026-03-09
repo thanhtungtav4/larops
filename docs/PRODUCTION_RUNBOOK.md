@@ -232,14 +232,13 @@ Source preparation rules:
 - If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
+- The default frontend auto-build path currently targets npm-managed projects and preflights `package.json -> engines.node` against the host Node runtime.
 - Composer build install runs with `--no-scripts`; Laravel package discovery is deferred to the app bootstrap phase after `.env` and release symlinks are ready.
 - If `--with-db` is set, LarOps provisions the application database and writes the app credential/password files before deploy.
-- When the deployed source contains `artisan`, `create site` also auto-runs app bootstrap after deploy:
-  - `php artisan key:generate --force` when `APP_KEY` is missing
-  - `php artisan package:discover --ansi`
-  - `php artisan migrate --force`
-  - `php artisan optimize:clear`
-  - `php artisan optimize`
+- When the deployed source contains `artisan`, `create site` defaults to `--app-bootstrap-mode auto`:
+  - it writes `APP_KEY` directly into `shared/.env` when missing
+  - it only runs `migrate`, `package:discover`, and `optimize*` when the app database already appears to have schema
+  - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` on fresh apps whose providers read DB-backed settings during boot
 - If a previous failed create already wrote app metadata, rerun with `--force`.
 
 For small VPS hosts, remember:

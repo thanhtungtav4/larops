@@ -86,12 +86,11 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
 - `create site --with-db` also syncs the main `DB_*` variables into `/var/www/<domain>/shared/.env`.
 - If the release contains `composer.json` but is missing `vendor/autoload.php`, LarOps auto-runs `composer install --no-scripts` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
-- When the deployed source contains `artisan`, LarOps auto-runs the first Laravel bootstrap after deploy:
-  - `php artisan key:generate --force` when needed
-  - `php artisan package:discover --ansi`
-  - `php artisan migrate --force`
-  - `php artisan optimize:clear`
-  - `php artisan optimize`
+- The default frontend auto-build path currently assumes an npm-managed project and preflights `package.json -> engines.node` against the host Node runtime.
+- When the deployed source contains `artisan`, `create site` now defaults to `--app-bootstrap-mode auto`:
+  - it writes `APP_KEY` directly into `shared/.env` when missing
+  - it runs `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema
+  - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` to avoid Laravel bootstrap entirely on first create
 - `bootstrap init --profile small-vps` now includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - On Ubuntu and Debian, `--php <major.minor>` automatically prepares the matching PHP package repository when the pinned version is newer than the distro default.
 - When deploy is enabled, `create site` also provisions a managed Nginx site config by default on supported single-node hosts.
