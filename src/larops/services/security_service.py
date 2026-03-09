@@ -9,6 +9,7 @@ from typing import Any
 
 from larops.core.shell import run_command
 from larops.services.app_lifecycle import list_registered_apps
+from larops.services.secure_service import nginx_root_include_status, resolve_nginx_hardening_paths
 from larops.services.stack_service import StackServiceError, detect_stack_platform
 from larops.services.monitor_systemd import (
     status_monitor_app_timer,
@@ -367,6 +368,9 @@ def _secure_nginx_check(secure_nginx: dict[str, Any]) -> str:
 
     include_status = secure_nginx["server_include"]
     if include_status["path"] is None:
+        root_include = secure_nginx["root_include"]
+        if root_include["verification_applicable"] is True:
+            return "ok" if root_include["loads_snippet"] is True else "error"
         return "warn"
     if not include_status.get("exists"):
         return "error"
@@ -381,21 +385,31 @@ def collect_security_posture(
     fail2ban_jail_path: Path,
     fail2ban_filter_path: Path,
     sshd_drop_in_file: Path,
-    nginx_http_config_file: Path,
-    nginx_server_snippet_file: Path,
+    nginx_http_config_file: Path | None,
+    nginx_server_snippet_file: Path | None,
     nginx_server_config_file: Path | None,
+    nginx_root_config_file: Path | None,
 ) -> dict[str, Any]:
     baseline = collect_security_status(
         fail2ban_jail_path=fail2ban_jail_path,
         fail2ban_filter_path=fail2ban_filter_path,
     )
     baseline_level = determine_security_status_level(baseline)
+    resolved_nginx_paths = resolve_nginx_hardening_paths(
+        http_config_file=nginx_http_config_file,
+        server_snippet_file=nginx_server_snippet_file,
+        root_config_file=nginx_root_config_file,
+    )
 
     secure_ssh = _managed_file_status(sshd_drop_in_file)
     secure_nginx = {
-        "http_config": _managed_file_status(nginx_http_config_file),
-        "server_snippet": _managed_file_status(nginx_server_snippet_file),
-        "server_include": _nginx_include_status(nginx_server_config_file, nginx_server_snippet_file),
+        "http_config": _managed_file_status(resolved_nginx_paths["http_config_file"]),
+        "server_snippet": _managed_file_status(resolved_nginx_paths["server_snippet_file"]),
+        "server_include": _nginx_include_status(nginx_server_config_file, resolved_nginx_paths["server_snippet_file"]),
+        "root_include": nginx_root_include_status(
+            root_config_file=resolved_nginx_paths["root_config_file"],
+            snippet_file=resolved_nginx_paths["server_snippet_file"],
+        ),
     }
     scan_timer = status_monitor_scan_timer(unit_dir=unit_dir, systemd_manage=systemd_manage)
     fim_timer = status_monitor_fim_timer(unit_dir=unit_dir, systemd_manage=systemd_manage)

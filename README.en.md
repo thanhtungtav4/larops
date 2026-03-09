@@ -72,15 +72,15 @@ Production host requirements:
 - Root or sudo access for stack install and system-level operations.
 - Network access to install packages and call external APIs (for SSL/Telegram).
 
-Recommended operating systems:
+Production-supported operating systems:
 
 - Ubuntu 24.04 LTS
 - Ubuntu 22.04 LTS
 - Debian 12
-- Debian 13 (experimental)
 
-Additional experimental targets:
+Preview / evaluation targets:
 
+- Debian 13
 - Rocky Linux 9
 - AlmaLinux 9
 - RHEL 9
@@ -88,6 +88,11 @@ Additional experimental targets:
 Detailed support status:
 
 - [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
+
+Practical scope:
+
+- If you want the lowest-risk production path, stay on Ubuntu 22.04/24.04 or Debian 12.
+- Debian 13 and EL9-family hosts are useful for validation and early rollout work, but they are not the primary production support scope yet.
 
 Practical VPS sizing guidance:
 
@@ -277,7 +282,7 @@ What it does not do:
 - It does not harden SSH daemon policy beyond baseline firewall/jail behavior.
 - It does not harden Nginx config itself.
 - It is baseline security, not full host hardening.
-- EL9 support is still experimental, and some distributions may still require manual Fail2ban repo preparation.
+- EL9 support is still preview-only, and some distributions may still require manual Fail2ban repo preparation.
 
 ### `larops security posture`
 
@@ -289,17 +294,16 @@ What it does:
   - `secure nginx`
   - monitor timers
   - Telegram notifier
-
-What it does not do:
-
-- It does not magically prove the Nginx hardening snippet is active unless you pass `--nginx-server-config-file`.
-- If LarOps can see the managed Nginx files but cannot verify that a vhost includes the snippet, posture will warn instead of claiming Nginx hardening is active.
   - registered app monitor timers
 
 What it does not do:
 
 - It does not apply any change.
 - It is an inspection/report command, not a remediation command.
+- On Debian-family hosts, LarOps cannot prove the server snippet is active unless you pass `--nginx-server-config-file`.
+- On EL9, LarOps can verify the stock `default.d/*.conf` path through `nginx.conf` when you keep the default snippet location or pass `--nginx-root-config-file`.
+- If LarOps sees managed Nginx hardening files but cannot verify activation, posture will warn instead of claiming Nginx hardening is active.
+- When SELinux is active, `secure ssh` and `secure nginx` now run `restorecon -F` on LarOps-managed files before validation/reload and will fail fast if `restorecon` is unavailable.
 
 ### `larops monitor scan run`
 

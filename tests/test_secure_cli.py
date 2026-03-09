@@ -33,6 +33,12 @@ def write_config(tmp_path: Path) -> Path:
     return config_file
 
 
+def el9_env(tmp_path: Path, *, os_id: str = "rocky") -> dict[str, str]:
+    os_release = tmp_path / "os-release"
+    os_release.write_text(f'ID="{os_id}"\nVERSION_ID="9.4"\n', encoding="utf-8")
+    return {"LAROPS_STACK_OS_RELEASE_PATH": str(os_release)}
+
+
 def test_secure_ssh_apply_writes_drop_in_and_validates(tmp_path: Path, monkeypatch) -> None:
     config = write_config(tmp_path)
     sshd_drop_in = tmp_path / "ssh" / "sshd_config.d" / "larops.conf"
@@ -41,6 +47,8 @@ def test_secure_ssh_apply_writes_drop_in_and_validates(tmp_path: Path, monkeypat
     sshd_config.write_text("Include sshd_config.d/*.conf\n", encoding="utf-8")
 
     def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Disabled\n", stderr="")
         if command[:2] == ["sshd", "-t"]:
             return CompletedProcess(command, 0, stdout="", stderr="")
         raise AssertionError(f"unexpected command: {command}")
@@ -79,6 +87,83 @@ def test_secure_ssh_apply_writes_drop_in_and_validates(tmp_path: Path, monkeypat
     assert "AllowUsers deploy ops" in body
     assert "AllowGroups wheel" in body
     assert "MaxStartups 10:30:60" in body
+
+
+def test_secure_ssh_el9_runs_restorecon_when_selinux_is_enforcing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    sshd_drop_in = tmp_path / "ssh" / "sshd_config.d" / "larops.conf"
+    sshd_config = tmp_path / "ssh" / "sshd_config"
+    sshd_config.parent.mkdir(parents=True, exist_ok=True)
+    sshd_config.write_text("Include sshd_config.d/*.conf\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        calls.append(command)
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Enforcing\n", stderr="")
+        if command[:2] == ["/usr/sbin/restorecon", "-F"]:
+            return CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["sshd", "-t"]:
+            return CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.secure_service.run_command", fake_run_command)
+    monkeypatch.setattr("larops.services.secure_service.shutil.which", lambda name: "/usr/sbin/restorecon" if name == "restorecon" else None)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "secure",
+            "ssh",
+            "--sshd-drop-in-file",
+            str(sshd_drop_in),
+            "--sshd-config-file",
+            str(sshd_config),
+            "--no-reload",
+            "--apply",
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    assert ["getenforce"] in calls
+    assert ["/usr/sbin/restorecon", "-F", str(sshd_drop_in)] in calls
+
+
+def test_secure_ssh_el9_fails_fast_when_restorecon_is_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    sshd_drop_in = tmp_path / "ssh" / "sshd_config.d" / "larops.conf"
+    sshd_config = tmp_path / "ssh" / "sshd_config"
+    sshd_config.parent.mkdir(parents=True, exist_ok=True)
+    sshd_config.write_text("Include sshd_config.d/*.conf\n", encoding="utf-8")
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Enforcing\n", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.secure_service.run_command", fake_run_command)
+    monkeypatch.setattr("larops.services.secure_service.shutil.which", lambda name: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "secure",
+            "ssh",
+            "--sshd-drop-in-file",
+            str(sshd_drop_in),
+            "--sshd-config-file",
+            str(sshd_config),
+            "--no-reload",
+            "--apply",
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 2
+    assert "restorecon is not available" in result.stdout
 
 
 def test_secure_ssh_rejects_whitespace_in_allow_user(tmp_path: Path) -> None:
@@ -130,6 +215,8 @@ def test_secure_nginx_apply_writes_files_and_injects_include(tmp_path: Path, mon
     )
 
     def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Disabled\n", stderr="")
         if command == ["nginx", "-t"]:
             return CompletedProcess(command, 0, stdout="ok", stderr="")
         raise AssertionError(f"unexpected command: {command}")
@@ -164,6 +251,48 @@ def test_secure_nginx_apply_writes_files_and_injects_include(tmp_path: Path, mon
     assert f"include {server_snippet};" in server_body
 
 
+def test_secure_nginx_el9_runs_restorecon_when_selinux_is_enforcing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    http_config = tmp_path / "nginx" / "conf.d" / "larops-security-http.conf"
+    server_snippet = tmp_path / "nginx" / "default.d" / "larops-security-server.conf"
+    calls: list[list[str]] = []
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        calls.append(command)
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Enforcing\n", stderr="")
+        if command[:2] == ["/usr/sbin/restorecon", "-F"]:
+            return CompletedProcess(command, 0, stdout="", stderr="")
+        if command == ["nginx", "-t"]:
+            return CompletedProcess(command, 0, stdout="ok", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.secure_service.run_command", fake_run_command)
+    monkeypatch.setattr("larops.services.secure_service.shutil.which", lambda name: "/usr/sbin/restorecon" if name == "restorecon" else None)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "secure",
+            "nginx",
+            "--http-config-file",
+            str(http_config),
+            "--server-snippet-file",
+            str(server_snippet),
+            "--nginx-root-config-file",
+            str(tmp_path / "nginx" / "nginx.conf"),
+            "--no-reload",
+            "--apply",
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    assert ["/usr/sbin/restorecon", "-F", str(http_config)] in calls
+    assert ["/usr/sbin/restorecon", "-F", str(server_snippet)] in calls
+
+
 def test_secure_nginx_strict_profile_applies_stricter_defaults_and_extra_blocks(tmp_path: Path, monkeypatch) -> None:
     config = write_config(tmp_path)
     http_config = tmp_path / "nginx" / "conf.d" / "larops-security-http.conf"
@@ -173,6 +302,8 @@ def test_secure_nginx_strict_profile_applies_stricter_defaults_and_extra_blocks(
     server_config.write_text("server {\n    listen 80;\n}\n", encoding="utf-8")
 
     def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command == ["getenforce"]:
+            return CompletedProcess(command, 0, stdout="Disabled\n", stderr="")
         if command == ["nginx", "-t"]:
             return CompletedProcess(command, 0, stdout="ok", stderr="")
         raise AssertionError(f"unexpected command: {command}")
@@ -208,3 +339,16 @@ def test_secure_nginx_strict_profile_applies_stricter_defaults_and_extra_blocks(
     assert "location = /adminer.php { return 404; }" in snippet_body
     assert "location ^~ /vendor/ { return 404; }" in snippet_body
     assert "location ^~ /private/ { return 404; }" in snippet_body
+
+
+def test_secure_nginx_plan_uses_el9_default_paths(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "secure", "nginx"],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    payload = __import__("json").loads(result.stdout.strip().splitlines()[0])
+    assert payload["server_snippet_file"] == "/etc/nginx/default.d/larops-security-server.conf"
+    assert payload["nginx_root_config_file"] == "/etc/nginx/nginx.conf"

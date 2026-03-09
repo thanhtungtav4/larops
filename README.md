@@ -44,6 +44,8 @@ larops create site example.com --apply
 ## Production Notes
 
 - LarOps is strongest today for serious single-node Laravel operations.
+- Official production OS targets are Ubuntu 22.04/24.04 and Debian 12.
+- Debian 13 and EL9-family hosts should currently be treated as preview/evaluation targets, not primary production targets.
 - Multi-node orchestration and HA are outside the current core scope.
 - Use pinned releases in production instead of unpinned installer flows.
 

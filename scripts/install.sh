@@ -92,13 +92,15 @@ assert_supported_os() {
       echo "[larops-install] Detected supported OS: ${OS_ID} ${OS_VERSION_ID}"
       ;;
     experimental)
-      echo "[larops-install] Detected experimental OS: ${OS_ID} ${OS_VERSION_ID}"
-      echo "[larops-install] Package naming and runtime layout are expected to be close to a supported family."
+      echo "[larops-install] Detected preview/experimental OS: ${OS_ID} ${OS_VERSION_ID}"
+      echo "[larops-install] This path is intended for evaluation, not for primary production support."
+      echo "[larops-install] Official production targets remain: Ubuntu 22.04/24.04 and Debian 12."
+      echo "[larops-install] Package naming, service names, SELinux/firewalld behavior, and runtime layout can still differ."
       ;;
     unsupported)
       echo "[larops-install] Unsupported OS: ${OS_ID:-unknown} ${OS_VERSION_ID:-unknown}"
-      echo "[larops-install] Supported today: Ubuntu 22.04/24.04, Debian 12."
-      echo "[larops-install] Experimental: Debian 13, Rocky Linux 9, AlmaLinux 9, RHEL 9."
+      echo "[larops-install] Official production targets: Ubuntu 22.04/24.04, Debian 12."
+      echo "[larops-install] Preview/evaluation targets: Debian 13, Rocky Linux 9, AlmaLinux 9, RHEL 9."
       if ! is_true "${LAROPS_ALLOW_UNSUPPORTED_OS}"; then
         echo "[larops-install] Refusing install on unsupported OS."
         echo "[larops-install] Set LAROPS_ALLOW_UNSUPPORTED_OS=true only if you accept package-manager-family assumptions."

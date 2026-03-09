@@ -8,6 +8,8 @@ from typing import Any
 import yaml
 
 from larops.core.shell import ShellCommandError, run_command
+from larops.services.host_layout_service import default_nginx_access_logs as default_host_nginx_access_logs
+from larops.services.host_layout_service import default_nginx_error_logs as default_host_nginx_error_logs
 
 
 class ObservabilityLogsError(RuntimeError):
@@ -35,11 +37,11 @@ def default_laravel_log_patterns(releases_path: Path) -> list[str]:
 
 
 def default_nginx_access_logs() -> list[str]:
-    return ["/var/log/nginx/access.log"]
+    return default_host_nginx_access_logs()
 
 
 def default_nginx_error_logs() -> list[str]:
-    return ["/var/log/nginx/error.log"]
+    return default_host_nginx_error_logs()
 
 
 def _validate_sink_config(

@@ -11,6 +11,7 @@ from larops.services.secure_service import (
     apply_secure_nginx,
     apply_secure_ssh,
     resolve_nginx_security_profile,
+    resolve_nginx_hardening_paths,
 )
 
 secure_app = typer.Typer(help="Apply preventive host and web hardening controls.")
@@ -131,14 +132,14 @@ def secure_ssh(
 def secure_nginx(
     ctx: typer.Context,
     profile: str = typer.Option("baseline", "--profile", help="Hardening profile: baseline|strict|api-heavy."),
-    http_config_file: Path = typer.Option(
-        Path("/etc/nginx/conf.d/larops-security-http.conf"),
+    http_config_file: Path | None = typer.Option(
+        None,
         "--http-config-file",
         help="HTTP-context Nginx config file for LarOps hardening.",
         dir_okay=False,
     ),
-    server_snippet_file: Path = typer.Option(
-        Path("/etc/nginx/snippets/larops-security-server.conf"),
+    server_snippet_file: Path | None = typer.Option(
+        None,
         "--server-snippet-file",
         help="Server-context Nginx security snippet.",
         dir_okay=False,
@@ -147,6 +148,12 @@ def secure_nginx(
         None,
         "--server-config-file",
         help="Optional server config file to inject snippet include into.",
+        dir_okay=False,
+    ),
+    nginx_root_config_file: Path | None = typer.Option(
+        None,
+        "--nginx-root-config-file",
+        help="Optional root nginx.conf used to verify EL9 default.d auto-includes.",
         dir_okay=False,
     ),
     login_rate: str | None = typer.Option(None, "--login-rate", help="Optional rate limit override for login/password routes."),
@@ -172,13 +179,19 @@ def secure_nginx(
     except SecureServiceError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
+    resolved_paths = resolve_nginx_hardening_paths(
+        http_config_file=http_config_file,
+        server_snippet_file=server_snippet_file,
+        root_config_file=nginx_root_config_file,
+    )
     app_ctx.emit_output(
         "ok",
         "Secure Nginx plan prepared.",
         profile=effective_profile["profile"],
-        http_config_file=str(http_config_file),
-        server_snippet_file=str(server_snippet_file),
+        http_config_file=str(resolved_paths["http_config_file"]),
+        server_snippet_file=str(resolved_paths["server_snippet_file"]),
         server_config_file=str(server_config_file) if server_config_file else None,
+        nginx_root_config_file=str(resolved_paths["root_config_file"]),
         login_rate=effective_profile["login_rate"],
         api_rate=effective_profile["api_rate"],
         login_burst=effective_profile["login_burst"],
@@ -200,6 +213,7 @@ def secure_nginx(
                 http_config_file=http_config_file,
                 server_snippet_file=server_snippet_file,
                 server_config_file=server_config_file,
+                root_config_file=nginx_root_config_file,
                 profile=profile,
                 login_rate=login_rate,
                 api_rate=api_rate,

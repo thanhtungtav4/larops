@@ -77,15 +77,15 @@ Production host:
 - quyền `root` hoặc `sudo` cho các tác vụ hệ thống
 - network outbound để cài package, gọi Let’s Encrypt, Telegram, object storage
 
-Hệ điều hành khuyến nghị:
+Hệ điều hành được support cho production:
 
 - Ubuntu 24.04 LTS
 - Ubuntu 22.04 LTS
 - Debian 12
-- Debian 13 (experimental)
 
-Các target experimental bổ sung:
+Các target dạng preview / evaluation:
 
+- Debian 13
 - Rocky Linux 9
 - AlmaLinux 9
 - RHEL 9
@@ -93,6 +93,11 @@ Các target experimental bổ sung:
 Ma trận support chi tiết:
 
 - [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
+
+Phạm vi thực dụng:
+
+- Nếu bạn muốn đường production ít rủi ro nhất, hãy giữ Ubuntu 22.04/24.04 hoặc Debian 12.
+- Debian 13 và EL9-family hiện phù hợp để test, đánh giá, chuẩn bị rollout sau này hơn là xem như production target chính thức.
 
 Khuyến nghị cấu hình VPS thực dụng:
 
@@ -274,7 +279,7 @@ Lệnh này không làm gì:
 - Không harden policy của `sshd` beyond baseline firewall/jail
 - Không harden Nginx config
 - Đây là baseline security, chưa phải full host hardening
-- EL9 hiện vẫn ở mức experimental, và một số distro có thể vẫn cần chuẩn bị repo Fail2ban thủ công
+- EL9 hiện vẫn ở mức preview, và một số distro có thể vẫn cần chuẩn bị repo Fail2ban thủ công
 
 ### `larops security posture`
 
@@ -292,8 +297,10 @@ Lệnh này không làm gì:
 
 - Không apply thay đổi nào
 - Đây là lệnh inspect/report, không phải remediation command
-- Không thể tự chứng minh snippet hardening của Nginx đang active nếu bạn không truyền `--nginx-server-config-file`
-- Nếu LarOps chỉ thấy các file hardening do nó quản lý nhưng chưa verify được vhost include snippet, report sẽ xuống `warn` thay vì báo Nginx đã được harden
+- Trên Debian-family, LarOps không thể tự chứng minh snippet hardening của Nginx đang active nếu bạn không truyền `--nginx-server-config-file`
+- Trên EL9, LarOps có thể verify đường `default.d/*.conf` qua `nginx.conf` nếu bạn giữ default path hoặc truyền `--nginx-root-config-file`
+- Nếu LarOps chỉ thấy các file hardening do nó quản lý nhưng chưa verify được hardening đang active, report sẽ xuống `warn` thay vì báo Nginx đã được harden
+- Khi SELinux đang active, `secure ssh` và `secure nginx` sẽ tự chạy `restorecon -F` cho các file do LarOps quản lý trước khi validate/reload; nếu host thiếu `restorecon`, lệnh sẽ fail rõ.
 
 ### `larops monitor scan run`
 

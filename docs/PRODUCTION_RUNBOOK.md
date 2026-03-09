@@ -1,4 +1,7 @@
-# Production Runbook (Ubuntu 22.04/24.04)
+# Production Runbook (Ubuntu 22.04/24.04, Debian 12)
+
+This runbook is written for the current GA production targets.
+If you are on Debian 13 or EL9-family hosts, treat the same commands as preview/evaluation paths and validate them on a real host before standardizing them.
 
 ## 1) Install pinned LarOps release
 
@@ -252,7 +255,11 @@ sudo larops --config /etc/larops/larops.yaml secure ssh \
   --allow-group wheel \
   --max-startups 10:30:60 \
   --apply
-sudo larops --config /etc/larops/larops.yaml secure nginx --server-config-file /etc/nginx/sites-enabled/example.com.conf --apply
+
+# Debian / Ubuntu
+sudo larops --config /etc/larops/larops.yaml secure nginx \
+  --server-config-file /etc/nginx/sites-enabled/example.com.conf \
+  --apply
 sudo larops --config /etc/larops/larops.yaml secure nginx \
   --profile strict \
   --block-path /private/ \
@@ -260,7 +267,19 @@ sudo larops --config /etc/larops/larops.yaml secure nginx \
   --apply
 sudo larops --config /etc/larops/larops.yaml security posture \
   --nginx-server-config-file /etc/nginx/sites-enabled/example.com.conf
+
+# EL9 (Rocky / Alma / RHEL 9)
+sudo larops --config /etc/larops/larops.yaml secure nginx --apply
+sudo larops --config /etc/larops/larops.yaml secure nginx \
+  --profile strict \
+  --block-path /private/ \
+  --nginx-root-config-file /etc/nginx/nginx.conf \
+  --apply
+sudo larops --config /etc/larops/larops.yaml security posture \
+  --nginx-root-config-file /etc/nginx/nginx.conf
 ```
+
+Note: on SELinux-enforcing hosts, `secure ssh` and `secure nginx` automatically run `restorecon -F` on LarOps-managed files before validation/reload. Keep `policycoreutils`/`restorecon` available on EL9 hosts.
 
 Smoke test:
 

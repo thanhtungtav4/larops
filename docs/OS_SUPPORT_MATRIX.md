@@ -5,7 +5,7 @@ LarOps is currently optimized for Linux hosts with `systemd`.
 This matrix separates:
 
 - `GA`: documented and intended as first-class support
-- `Experimental`: expected to work with caveats, but not yet hardened to the same level
+- `Preview`: useful for evaluation and early validation, but not yet a primary production target
 - `Planned`: realistic next targets, not implemented yet
 - `Not planned`: outside the current architecture
 
@@ -13,13 +13,13 @@ This matrix separates:
 
 | OS | Status | Notes |
 | --- | --- | --- |
-| Ubuntu 22.04 LTS | GA | Primary support target |
-| Ubuntu 24.04 LTS | GA | Primary support target |
-| Debian 12 | GA | Supported with Debian-family package assumptions |
-| Debian 13 | Experimental | Expected to work with `apt` + `systemd`, but package naming still follows Debian-family assumptions from current stack map |
-| Rocky Linux 9 | Experimental | Installer + stack package planning/install are supported via `dnf`; baseline `firewalld` + Fail2ban security flow is available experimentally |
-| AlmaLinux 9 | Experimental | Same scope as Rocky Linux 9 |
-| RHEL 9 | Experimental | Installer + stack package planning/install are supported via `dnf`; LarOps will attempt the EPEL + Fail2ban + firewalld path, but repo preparation can still require manual steps |
+| Ubuntu 22.04 LTS | GA | Primary production support target |
+| Ubuntu 24.04 LTS | GA | Primary production support target |
+| Debian 12 | GA | Production-supported with Debian-family package assumptions |
+| Debian 13 | Preview | Reasonable evaluation target with `apt` + `systemd`, but not yet promoted to production support |
+| Rocky Linux 9 | Preview | Installer + stack planning/install work experimentally via `dnf`, but parity with Debian-family is incomplete |
+| AlmaLinux 9 | Preview | Same scope as Rocky Linux 9 |
+| RHEL 9 | Preview | Installer + stack planning/install work experimentally via `dnf`, but repo preparation and host semantics can still differ |
 | Amazon Linux 2023 | Planned | Needs package/service abstraction review |
 | Alpine Linux | Not planned | Current architecture assumes `systemd`, Debian-style package naming, and glibc-oriented host tooling |
 | Arch Linux | Not planned | Current architecture is not targeting rolling-release distributions |
@@ -39,7 +39,7 @@ Code examples:
 - Stack package mapping is Debian-family specific: [`src/larops/services/stack_service.py`](/Volumes/Manager%20Data/Tool/larops/src/larops/services/stack_service.py)
 - Runtime and monitoring rely heavily on `systemd`: [`src/larops/config.py`](/Volumes/Manager%20Data/Tool/larops/src/larops/config.py)
 
-## What "Experimental" Means for Debian 13
+## What "Preview" Means for Debian 13
 
 Debian 13 is treated as a reasonable next target because:
 
@@ -58,7 +58,7 @@ If those package names differ on a given Debian 13 host, `stack install` / `boot
 
 ## What Still Blocks Full RHEL-Family Parity
 
-Rocky / Alma / RHEL 9 now have experimental installer and stack support, but LarOps still needs these layers before they should be promoted beyond experimental:
+Rocky / Alma / RHEL 9 now have preview-level installer and stack support, but LarOps still needs these layers before they should be promoted beyond preview:
 
 1. OS detection
 2. Package manager abstraction (`apt` vs `dnf`)
@@ -70,7 +70,7 @@ Rocky / Alma / RHEL 9 now have experimental installer and stack support, but Lar
 
 ## Recommended Rollout Order
 
-1. Harden Debian 13 from experimental to GA
+1. Harden Debian 13 from preview to GA
 2. Review SELinux-aware operational flows for RHEL-family hosts
 3. Improve package/repo guidance for RHEL-family Fail2ban installs
 4. Evaluate Amazon Linux 2023 separately

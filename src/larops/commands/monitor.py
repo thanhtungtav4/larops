@@ -9,6 +9,7 @@ from larops.config import DEFAULT_CONFIG_PATH
 from larops.core.locks import CommandLock, CommandLockError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.host_layout_service import default_nginx_access_log_path
 from larops.services.monitor_app_service import MonitorAppError, run_app_monitor
 from larops.services.monitor_fim_service import (
     DEFAULT_FIM_PATTERNS,
@@ -100,8 +101,8 @@ def _resolve_cli_config_path(app_ctx: AppContext) -> Path:
 @scan_app.command("run")
 def scan_run(
     ctx: typer.Context,
-    nginx_log_path: Path = typer.Option(
-        Path("/var/log/nginx/access.log"),
+    nginx_log_path: Path | None = typer.Option(
+        None,
         "--nginx-log-path",
         help="Nginx access log path.",
         dir_okay=False,
@@ -119,11 +120,12 @@ def scan_run(
     apply: bool = typer.Option(False, "--apply", help="Execute scan and emit events."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    resolved_nginx_log_path = nginx_log_path or default_nginx_access_log_path()
     resolved_state_file = state_file or _default_scan_state_file(app_ctx)
     app_ctx.emit_output(
         "ok",
         "Monitor scan plan prepared.",
-        nginx_log_path=str(nginx_log_path),
+        nginx_log_path=str(resolved_nginx_log_path),
         state_file=str(resolved_state_file),
         threshold_hits=threshold_hits,
         window_seconds=window_seconds,
@@ -139,7 +141,7 @@ def scan_run(
     try:
         with CommandLock("monitor-scan-run"):
             result = scan_nginx_incremental(
-                log_path=nginx_log_path,
+                log_path=resolved_nginx_log_path,
                 state_path=resolved_state_file,
                 threshold_hits=threshold_hits,
                 window_seconds=window_seconds,
@@ -152,7 +154,7 @@ def scan_run(
             severity="error",
             event_type="monitor.scan.failed",
             message="Monitor scan failed.",
-            metadata={"error": str(exc), "log_path": str(nginx_log_path)},
+            metadata={"error": str(exc), "log_path": str(resolved_nginx_log_path)},
         )
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
@@ -164,7 +166,7 @@ def scan_run(
             event_type="monitor.scan.threshold_exceeded",
             message="Suspicious scan threshold exceeded.",
             metadata={
-                "log_path": str(nginx_log_path),
+                "log_path": str(resolved_nginx_log_path),
                 "ip": alert["ip"],
                 "hits": alert["hits"],
                 "threshold": alert["threshold"],
@@ -177,7 +179,7 @@ def scan_run(
         event_type="monitor.scan.completed",
         message="Monitor scan completed.",
         metadata={
-            "log_path": str(nginx_log_path),
+            "log_path": str(resolved_nginx_log_path),
             "suspicious_total": result["suspicious_total"],
             "alerts": len(result["alerts"]),
             "window_seconds": result["window_seconds"],
@@ -198,8 +200,8 @@ def scan_timer_enable(
     randomized_delay: int = typer.Option(15, "--randomized-delay", help="RandomizedDelaySec in seconds."),
     user: str = typer.Option("root", "--user", help="System user used by monitor scan service."),
     larops_bin: str = typer.Option("/usr/local/bin/larops", "--larops-bin", help="LarOps executable path."),
-    nginx_log_path: Path = typer.Option(
-        Path("/var/log/nginx/access.log"),
+    nginx_log_path: Path | None = typer.Option(
+        None,
         "--nginx-log-path",
         help="Nginx access log path.",
         dir_okay=False,
@@ -218,6 +220,7 @@ def scan_timer_enable(
 ) -> None:
     app_ctx: AppContext = ctx.obj
     config_path = _resolve_cli_config_path(app_ctx)
+    resolved_nginx_log_path = nginx_log_path or default_nginx_access_log_path()
     resolved_state = state_file or _default_scan_state_file(app_ctx)
     app_ctx.emit_output(
         "ok",
@@ -227,7 +230,7 @@ def scan_timer_enable(
         user=user,
         larops_bin=larops_bin,
         config_path=str(config_path),
-        nginx_log_path=str(nginx_log_path),
+        nginx_log_path=str(resolved_nginx_log_path),
         state_file=str(resolved_state),
         threshold_hits=threshold_hits,
         window_seconds=window_seconds,
@@ -250,7 +253,7 @@ def scan_timer_enable(
                 randomized_delay_seconds=randomized_delay,
                 larops_bin=larops_bin,
                 config_path=config_path,
-                nginx_log_path=nginx_log_path,
+                nginx_log_path=resolved_nginx_log_path,
                 state_file=resolved_state,
                 threshold_hits=threshold_hits,
                 window_seconds=window_seconds,

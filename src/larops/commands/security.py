@@ -9,6 +9,12 @@ from larops.core.locks import CommandLock, CommandLockError
 from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.host_layout_service import (
+    default_fail2ban_filter_file,
+    default_fail2ban_jail_file,
+    default_fail2ban_log_path,
+    default_nginx_access_log_path,
+)
 from larops.services.security_service import (
     SecurityReportError,
     SecurityServiceError,
@@ -42,32 +48,48 @@ def _emit(
     )
 
 
+def _resolve_fail2ban_jail_file(path: Path | None) -> Path:
+    return path or default_fail2ban_jail_file()
+
+
+def _resolve_fail2ban_filter_file(path: Path | None) -> Path:
+    return path or default_fail2ban_filter_file()
+
+
+def _resolve_fail2ban_log_path(path: Path | None) -> Path:
+    return path or default_fail2ban_log_path()
+
+
+def _resolve_nginx_log_path(path: Path | None) -> Path:
+    return path or default_nginx_access_log_path()
+
+
 @security_app.command("install")
 def install(
     ctx: typer.Context,
     ssh_port: int = typer.Option(22, "--ssh-port", help="SSH port to allow in UFW and Fail2ban jail."),
     limit_ssh: bool = typer.Option(True, "--limit-ssh/--no-limit-ssh", help="Enable UFW SSH rate limiting."),
     ufw_logging: str = typer.Option("low", "--ufw-logging", help="UFW logging level: off|on|low|medium|high|full."),
-    fail2ban_jail_file: Path = typer.Option(
-        Path("/etc/fail2ban/jail.d/larops.conf"),
+    fail2ban_jail_file: Path | None = typer.Option(
+        None,
         "--fail2ban-jail-file",
         help="Fail2ban jail file path.",
         dir_okay=False,
     ),
-    fail2ban_filter_file: Path = typer.Option(
-        Path("/etc/fail2ban/filter.d/larops-nginx-scan.conf"),
+    fail2ban_filter_file: Path | None = typer.Option(
+        None,
         "--fail2ban-filter-file",
         help="Fail2ban filter file path.",
         dir_okay=False,
     ),
-    nginx_log_path: Path = typer.Option(
-        Path("/var/log/nginx/access.log"),
+    nginx_log_path: Path | None = typer.Option(
+        None,
         "--nginx-log-path",
         help="Nginx access log path for scan jail.",
         dir_okay=False,
     ),
-    fail2ban_log_path: Path = typer.Option(
-        Path("/var/log/fail2ban.log"),
+    fail2ban_log_path: Path | None = typer.Option(
+        None,
         "--fail2ban-log-path",
         help="Fail2ban log file path.",
         dir_okay=False,
@@ -79,15 +101,20 @@ def install(
         app_ctx.emit_output("error", "SSH port must be between 1 and 65535.")
         raise typer.Exit(code=2)
 
+    resolved_fail2ban_jail_file = _resolve_fail2ban_jail_file(fail2ban_jail_file)
+    resolved_fail2ban_filter_file = _resolve_fail2ban_filter_file(fail2ban_filter_file)
+    resolved_nginx_log_path = _resolve_nginx_log_path(nginx_log_path)
+    resolved_fail2ban_log_path = _resolve_fail2ban_log_path(fail2ban_log_path)
+
     try:
         plan = build_security_install_plan(
             ssh_port=ssh_port,
             limit_ssh=limit_ssh,
             ufw_logging=ufw_logging,
-            fail2ban_jail_path=fail2ban_jail_file,
-            fail2ban_filter_path=fail2ban_filter_file,
-            nginx_log_path=nginx_log_path,
-            fail2ban_log_path=fail2ban_log_path,
+            fail2ban_jail_path=resolved_fail2ban_jail_file,
+            fail2ban_filter_path=resolved_fail2ban_filter_file,
+            nginx_log_path=resolved_nginx_log_path,
+            fail2ban_log_path=resolved_fail2ban_log_path,
         )
     except SecurityServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -101,8 +128,8 @@ def install(
         firewall_commands=plan.firewall_commands,
         fail2ban_jail_file=str(plan.fail2ban_jail_path),
         fail2ban_filter_file=str(plan.fail2ban_filter_path),
-        nginx_log_path=str(nginx_log_path),
-        fail2ban_log_path=str(fail2ban_log_path),
+        nginx_log_path=str(resolved_nginx_log_path),
+        fail2ban_log_path=str(resolved_fail2ban_log_path),
         notes=plan.notes or [],
         apply=apply,
         dry_run=app_ctx.dry_run,
@@ -152,24 +179,26 @@ def install(
 @security_app.command("status")
 def status(
     ctx: typer.Context,
-    fail2ban_jail_file: Path = typer.Option(
-        Path("/etc/fail2ban/jail.d/larops.conf"),
+    fail2ban_jail_file: Path | None = typer.Option(
+        None,
         "--fail2ban-jail-file",
         help="Fail2ban jail file path.",
         dir_okay=False,
     ),
-    fail2ban_filter_file: Path = typer.Option(
-        Path("/etc/fail2ban/filter.d/larops-nginx-scan.conf"),
+    fail2ban_filter_file: Path | None = typer.Option(
+        None,
         "--fail2ban-filter-file",
         help="Fail2ban filter file path.",
         dir_okay=False,
     ),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    resolved_fail2ban_jail_file = _resolve_fail2ban_jail_file(fail2ban_jail_file)
+    resolved_fail2ban_filter_file = _resolve_fail2ban_filter_file(fail2ban_filter_file)
     try:
         report = collect_security_status(
-            fail2ban_jail_path=fail2ban_jail_file,
-            fail2ban_filter_path=fail2ban_filter_file,
+            fail2ban_jail_path=resolved_fail2ban_jail_file,
+            fail2ban_filter_path=resolved_fail2ban_filter_file,
         )
     except SecurityServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -181,14 +210,14 @@ def status(
 @security_app.command("posture")
 def posture(
     ctx: typer.Context,
-    fail2ban_jail_file: Path = typer.Option(
-        Path("/etc/fail2ban/jail.d/larops.conf"),
+    fail2ban_jail_file: Path | None = typer.Option(
+        None,
         "--fail2ban-jail-file",
         help="Fail2ban jail file path.",
         dir_okay=False,
     ),
-    fail2ban_filter_file: Path = typer.Option(
-        Path("/etc/fail2ban/filter.d/larops-nginx-scan.conf"),
+    fail2ban_filter_file: Path | None = typer.Option(
+        None,
         "--fail2ban-filter-file",
         help="Fail2ban filter file path.",
         dir_okay=False,
@@ -199,14 +228,14 @@ def posture(
         help="LarOps-managed sshd drop-in file.",
         dir_okay=False,
     ),
-    nginx_http_config_file: Path = typer.Option(
-        Path("/etc/nginx/conf.d/larops-security-http.conf"),
+    nginx_http_config_file: Path | None = typer.Option(
+        None,
         "--nginx-http-config-file",
         help="LarOps-managed HTTP-context Nginx security config.",
         dir_okay=False,
     ),
-    nginx_server_snippet_file: Path = typer.Option(
-        Path("/etc/nginx/snippets/larops-security-server.conf"),
+    nginx_server_snippet_file: Path | None = typer.Option(
+        None,
         "--nginx-server-snippet-file",
         help="LarOps-managed server-context Nginx security snippet.",
         dir_okay=False,
@@ -217,19 +246,28 @@ def posture(
         help="Optional vhost file used to verify snippet include injection.",
         dir_okay=False,
     ),
+    nginx_root_config_file: Path | None = typer.Option(
+        None,
+        "--nginx-root-config-file",
+        help="Optional root nginx.conf used to verify EL9 default.d auto-includes.",
+        dir_okay=False,
+    ),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    resolved_fail2ban_jail_file = _resolve_fail2ban_jail_file(fail2ban_jail_file)
+    resolved_fail2ban_filter_file = _resolve_fail2ban_filter_file(fail2ban_filter_file)
     try:
         report = collect_security_posture(
             state_path=Path(app_ctx.config.state_path),
             unit_dir=Path(app_ctx.config.systemd.unit_dir),
             systemd_manage=app_ctx.config.systemd.manage,
-            fail2ban_jail_path=fail2ban_jail_file,
-            fail2ban_filter_path=fail2ban_filter_file,
+            fail2ban_jail_path=resolved_fail2ban_jail_file,
+            fail2ban_filter_path=resolved_fail2ban_filter_file,
             sshd_drop_in_file=sshd_drop_in_file,
             nginx_http_config_file=nginx_http_config_file,
             nginx_server_snippet_file=nginx_server_snippet_file,
             nginx_server_config_file=nginx_server_config_file,
+            nginx_root_config_file=nginx_root_config_file,
         )
     except SecurityServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -240,14 +278,14 @@ def posture(
 @security_app.command("report")
 def report(
     ctx: typer.Context,
-    fail2ban_log_path: Path = typer.Option(
-        Path("/var/log/fail2ban.log"),
+    fail2ban_log_path: Path | None = typer.Option(
+        None,
         "--fail2ban-log-path",
         help="Fail2ban log path.",
         dir_okay=False,
     ),
-    nginx_log_path: Path = typer.Option(
-        Path("/var/log/nginx/access.log"),
+    nginx_log_path: Path | None = typer.Option(
+        None,
         "--nginx-log-path",
         help="Nginx access log path.",
         dir_okay=False,
@@ -257,10 +295,12 @@ def report(
     since: str | None = typer.Option(None, "--since", help="Relative time window (examples: 15m, 6h, 2d, 1w)."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    resolved_fail2ban_log_path = _resolve_fail2ban_log_path(fail2ban_log_path)
+    resolved_nginx_log_path = _resolve_nginx_log_path(nginx_log_path)
     try:
         payload = build_security_report(
-            fail2ban_log_path=fail2ban_log_path,
-            nginx_log_path=nginx_log_path,
+            fail2ban_log_path=resolved_fail2ban_log_path,
+            nginx_log_path=resolved_nginx_log_path,
             max_lines=max_lines,
             top=top,
             since=since,

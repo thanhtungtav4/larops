@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 from larops.core.shell import ShellCommandError, run_command
+from larops.services.stack_service import StackServiceError, detect_stack_platform
 
 
 class SecureServiceError(RuntimeError):
@@ -52,6 +54,12 @@ _NGINX_SECURITY_PROFILES = {
 }
 _DEFAULT_LOGIN_ROUTE_KEYS = ["=/login", "~^/password/", "~^/two-factor"]
 _DEFAULT_API_ROUTE_KEYS = ["~^/api/"]
+_DEFAULT_NGINX_HTTP_CONFIG_FILE = Path("/etc/nginx/conf.d/larops-security-http.conf")
+_DEFAULT_NGINX_ROOT_CONFIG_FILE = Path("/etc/nginx/nginx.conf")
+_DEFAULT_NGINX_SERVER_SNIPPET_FILES = {
+    "debian": Path("/etc/nginx/snippets/larops-security-server.conf"),
+    "el9": Path("/etc/nginx/default.d/larops-security-server.conf"),
+}
 
 
 def _systemctl_text(args: list[str]) -> str:
@@ -75,6 +83,13 @@ def _resolve_reload_service(preferred: str | None, candidates: list[str]) -> str
         if _service_exists(candidate):
             return candidate
     raise SecureServiceError(f"No known systemd service found for candidates: {', '.join(candidates)}")
+
+
+def _detected_platform_family() -> str:
+    try:
+        return detect_stack_platform().family
+    except StackServiceError:
+        return "debian"
 
 
 def _validate_rate(value: str, *, label: str) -> str:
@@ -121,6 +136,50 @@ def _normalize_block_paths(paths: list[str]) -> list[str]:
             raise SecureServiceError(f"Block paths cannot contain whitespace: {raw!r}")
         normalized.append(cleaned)
     return list(dict.fromkeys(normalized))
+
+
+def resolve_nginx_hardening_paths(
+    *,
+    http_config_file: Path | None,
+    server_snippet_file: Path | None,
+    root_config_file: Path | None,
+) -> dict[str, Path]:
+    family = _detected_platform_family()
+    return {
+        "http_config_file": http_config_file or _DEFAULT_NGINX_HTTP_CONFIG_FILE,
+        "server_snippet_file": server_snippet_file or _DEFAULT_NGINX_SERVER_SNIPPET_FILES.get(family, _DEFAULT_NGINX_SERVER_SNIPPET_FILES["debian"]),
+        "root_config_file": root_config_file or _DEFAULT_NGINX_ROOT_CONFIG_FILE,
+    }
+
+
+def nginx_root_include_status(*, root_config_file: Path, snippet_file: Path) -> dict[str, Any]:
+    applicable = snippet_file.parent.name == "default.d"
+    exists = root_config_file.exists() and root_config_file.is_file()
+    loads_snippet: bool | None = None
+
+    if applicable:
+        if exists:
+            try:
+                body = root_config_file.read_text(encoding="utf-8")
+            except OSError:
+                body = ""
+            exact_include = f"include {snippet_file};" in body
+            glob_include = bool(
+                re.search(
+                    rf"include\s+{re.escape(str(snippet_file.parent))}/\*\.conf;",
+                    body,
+                )
+            )
+            loads_snippet = exact_include or (snippet_file.suffix == ".conf" and glob_include)
+        else:
+            loads_snippet = False
+
+    return {
+        "path": str(root_config_file),
+        "exists": exists,
+        "verification_applicable": applicable,
+        "loads_snippet": loads_snippet,
+    }
 
 
 def resolve_nginx_security_profile(
@@ -171,6 +230,36 @@ def _restore_file(path: Path, previous: str | None) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(previous, encoding="utf-8")
+
+
+def _detect_selinux_mode() -> str:
+    try:
+        completed = run_command(["getenforce"], check=False)
+    except FileNotFoundError:
+        return "disabled"
+    mode = (completed.stdout or completed.stderr or "").strip().lower()
+    if mode in {"enforcing", "permissive", "disabled"}:
+        return mode
+    return "disabled"
+
+
+def _relabel_managed_paths_for_selinux(paths: list[Path]) -> dict[str, Any]:
+    mode = _detect_selinux_mode()
+    if mode == "disabled":
+        return {"mode": mode, "relabelled_paths": []}
+
+    restorecon_bin = shutil.which("restorecon")
+    if not restorecon_bin:
+        raise SecureServiceError("SELinux is active but restorecon is not available.")
+
+    relabelled_paths: list[str] = []
+    for path in dict.fromkeys(paths):
+        try:
+            run_command([restorecon_bin, "-F", str(path)], check=True)
+        except (ShellCommandError, FileNotFoundError) as exc:
+            raise SecureServiceError(str(exc)) from exc
+        relabelled_paths.append(str(path))
+    return {"mode": mode, "relabelled_paths": relabelled_paths}
 
 
 def render_sshd_drop_in(
@@ -280,6 +369,7 @@ def apply_secure_ssh(
     sshd_drop_in_file.parent.mkdir(parents=True, exist_ok=True)
     sshd_drop_in_file.write_text(body, encoding="utf-8")
     try:
+        selinux = _relabel_managed_paths_for_selinux([sshd_drop_in_file])
         run_command([sshd_bin, "-t", "-f", str(sshd_config_file)], check=True)
         reloaded_service = None
         if reload_after_validate:
@@ -298,6 +388,7 @@ def apply_secure_ssh(
         "allow_users": normalized_allow_users,
         "allow_groups": normalized_allow_groups,
         "max_startups": normalized_max_startups,
+        "selinux": selinux,
         "reloaded_service": reloaded_service,
     }
 
@@ -409,9 +500,10 @@ def inject_nginx_server_include(*, server_config_file: Path, snippet_file: Path)
 
 def apply_secure_nginx(
     *,
-    http_config_file: Path,
-    server_snippet_file: Path,
+    http_config_file: Path | None,
+    server_snippet_file: Path | None,
     server_config_file: Path | None,
+    root_config_file: Path | None,
     profile: str,
     login_rate: str | None,
     api_rate: str | None,
@@ -422,6 +514,15 @@ def apply_secure_nginx(
     reload_service: str | None,
     reload_after_validate: bool,
 ) -> dict[str, Any]:
+    resolved_paths = resolve_nginx_hardening_paths(
+        http_config_file=http_config_file,
+        server_snippet_file=server_snippet_file,
+        root_config_file=root_config_file,
+    )
+    resolved_http_config_file = resolved_paths["http_config_file"]
+    resolved_server_snippet_file = resolved_paths["server_snippet_file"]
+    resolved_root_config_file = resolved_paths["root_config_file"]
+
     profile_config = resolve_nginx_security_profile(
         profile=profile,
         login_rate=login_rate,
@@ -448,21 +549,33 @@ def apply_secure_nginx(
     )
 
     snapshots = {
-        http_config_file: _snapshot_file(http_config_file),
-        server_snippet_file: _snapshot_file(server_snippet_file),
+        resolved_http_config_file: _snapshot_file(resolved_http_config_file),
+        resolved_server_snippet_file: _snapshot_file(resolved_server_snippet_file),
     }
     if server_config_file is not None:
         snapshots[server_config_file] = _snapshot_file(server_config_file)
 
-    http_config_file.parent.mkdir(parents=True, exist_ok=True)
-    server_snippet_file.parent.mkdir(parents=True, exist_ok=True)
-    http_config_file.write_text(http_body, encoding="utf-8")
-    server_snippet_file.write_text(server_body, encoding="utf-8")
+    resolved_http_config_file.parent.mkdir(parents=True, exist_ok=True)
+    resolved_server_snippet_file.parent.mkdir(parents=True, exist_ok=True)
+    resolved_http_config_file.write_text(http_body, encoding="utf-8")
+    resolved_server_snippet_file.write_text(server_body, encoding="utf-8")
 
     include_added = False
+    activation_mode = "unverified"
+    root_include = nginx_root_include_status(
+        root_config_file=resolved_root_config_file,
+        snippet_file=resolved_server_snippet_file,
+    )
     try:
+        selinux = _relabel_managed_paths_for_selinux([resolved_http_config_file, resolved_server_snippet_file])
         if server_config_file is not None:
-            include_added = inject_nginx_server_include(server_config_file=server_config_file, snippet_file=server_snippet_file)
+            include_added = inject_nginx_server_include(
+                server_config_file=server_config_file,
+                snippet_file=resolved_server_snippet_file,
+            )
+            activation_mode = "server-config-include"
+        elif root_include["verification_applicable"] and root_include["loads_snippet"] is True:
+            activation_mode = "root-config-include"
         run_command([nginx_bin, "-t"], check=True)
         reloaded_service = None
         if reload_after_validate:
@@ -474,15 +587,19 @@ def apply_secure_nginx(
         raise SecureServiceError(str(exc)) from exc
 
     return {
-        "http_config_file": str(http_config_file),
-        "server_snippet_file": str(server_snippet_file),
+        "http_config_file": str(resolved_http_config_file),
+        "server_snippet_file": str(resolved_server_snippet_file),
         "server_config_file": str(server_config_file) if server_config_file is not None else None,
+        "root_config_file": str(resolved_root_config_file),
         "server_include_added": include_added,
+        "root_include": root_include,
+        "activation_mode": activation_mode,
         "profile": str(profile_config["profile"]),
         "login_rate": str(profile_config["login_rate"]),
         "api_rate": str(profile_config["api_rate"]),
         "login_burst": int(profile_config["login_burst"]),
         "api_burst": int(profile_config["api_burst"]),
         "extra_block_paths": list(profile_config["extra_block_paths"]),
+        "selinux": selinux,
         "reloaded_service": reloaded_service,
     }
