@@ -252,6 +252,75 @@ def test_create_site_apply_clones_git_source_when_requested(tmp_path: Path, monk
     assert (source / "artisan").exists()
 
 
+def test_create_site_apply_bootstraps_laravel_artisan_after_deploy(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"]
+    assert len(bootstrap) == 1
+    assert bootstrap[0][0] == "php artisan key:generate --force"
+    assert "php artisan migrate --force" in bootstrap[0]
+    assert "php artisan optimize" in bootstrap[0]
+    assert "app bootstrap: completed" in result.stdout
+
+
+def test_create_site_apply_skips_key_generate_when_app_key_exists(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "demo.test")
+    (source / ".env").write_text("APP_NAME=Demo\nAPP_KEY=base64:existing-key\n", encoding="utf-8")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    assert "php artisan key:generate --force" not in bootstrap
+    assert bootstrap[0] == "php artisan migrate --force"
+
+
+def test_create_site_apply_skips_app_bootstrap_when_artisan_is_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = tmp_path / "sources" / "demo.test"
+    source.mkdir(parents=True, exist_ok=True)
+    (source / ".env").write_text("APP_NAME=Demo\n", encoding="utf-8")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    assert bootstrap == []
+    assert "app bootstrap: completed" not in result.stdout
+
+
 def test_create_site_invalid_type_rejected(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(

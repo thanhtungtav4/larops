@@ -163,6 +163,11 @@ What `create site` does on a fresh host:
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
+- When the deployed source contains `artisan`, `create site` also auto-runs the first app bootstrap after deploy:
+  - `php artisan key:generate --force` only when `APP_KEY` is missing
+  - `php artisan migrate --force`
+  - `php artisan optimize:clear`
+  - `php artisan optimize`
 - `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
 

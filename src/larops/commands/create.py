@@ -132,6 +132,7 @@ def _emit_create_site_summary(
     nginx_result: dict | None,
     db_result: dict | None,
     env_sync_result: dict | None,
+    bootstrap_reports: list[dict[str, Any]],
 ) -> None:
     if app_ctx.json_output:
         return
@@ -168,8 +169,39 @@ def _emit_create_site_summary(
         )
     if env_sync_result is not None:
         lines.append(f"  env file: {env_sync_result['env_file']}")
+    if bootstrap_reports:
+        lines.append("  app bootstrap: completed")
     for line in lines:
         app_ctx.emit_output("ok", line)
+
+
+def _shared_env_has_app_key(env_file: Path) -> bool:
+    if not env_file.exists():
+        return False
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or not line.startswith("APP_KEY="):
+            continue
+        value = line.split("=", 1)[1].strip().strip('"').strip("'")
+        if value:
+            return True
+    return False
+
+
+def _resolve_bootstrap_app_commands(*, site_profile: dict[str, Any], current_path: Path, shared_env_file: Path) -> list[str]:
+    if not (current_path / "artisan").exists():
+        return []
+    commands: list[str] = []
+    if not _shared_env_has_app_key(shared_env_file):
+        commands.append("php artisan key:generate --force")
+    commands.extend(
+        [
+            "php artisan migrate --force",
+            "php artisan optimize:clear",
+            "php artisan optimize",
+        ]
+    )
+    return commands
 
 
 def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, bool]:
@@ -976,6 +1008,7 @@ def create_site(
     nginx_result: dict | None = None
     db_result: dict | None = None
     env_sync_result: dict | None = None
+    bootstrap_reports: list[dict[str, Any]] = []
     db_provisioned = False
     db_password_value: str | None = None
     existing_cert_file = default_cert_file(domain)
@@ -1085,6 +1118,17 @@ def create_site(
                     commands=phase_commands["post_activate"],
                     timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
                 )
+                bootstrap_commands = _resolve_bootstrap_app_commands(
+                    site_profile=site_profile,
+                    current_path=current_path,
+                    shared_env_file=paths.shared / ".env",
+                )
+                bootstrap_reports = run_release_commands(
+                    workdir=current_path,
+                    phase="app-bootstrap",
+                    commands=bootstrap_commands,
+                    timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
+                )
                 health_check = run_http_health_check(
                     domain=domain,
                     path=app_ctx.config.deploy.health_check_path,
@@ -1115,6 +1159,7 @@ def create_site(
                     "build_reports": build_reports,
                     "pre_activate_reports": pre_activate_reports,
                     "post_activate_reports": post_activate_reports,
+                    "bootstrap_reports": bootstrap_reports,
                     "verify_reports": verify_reports,
                     "health_check": health_check,
                 }
@@ -1131,6 +1176,7 @@ def create_site(
                             "build": build_reports,
                             "pre_activate": pre_activate_reports,
                             "post_activate": post_activate_reports,
+                            "app_bootstrap": bootstrap_reports,
                             "verify": verify_reports,
                         },
                         "health_check": health_check,
@@ -1253,6 +1299,7 @@ def create_site(
         nginx_result=nginx_result,
         db_result=db_result,
         env_sync_result=env_sync_result,
+        bootstrap_reports=bootstrap_reports,
     )
     _emit_create_site_summary(
         app_ctx,
@@ -1264,4 +1311,5 @@ def create_site(
         nginx_result=nginx_result,
         db_result=db_result,
         env_sync_result=env_sync_result,
+        bootstrap_reports=bootstrap_reports,
     )

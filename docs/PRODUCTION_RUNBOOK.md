@@ -224,6 +224,11 @@ Source preparation rules:
 - If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - If `--with-db` is set, LarOps provisions the application database and writes the app credential/password files before deploy.
+- When the deployed source contains `artisan`, `create site` also auto-runs app bootstrap after deploy:
+  - `php artisan key:generate --force` when `APP_KEY` is missing
+  - `php artisan migrate --force`
+  - `php artisan optimize:clear`
+  - `php artisan optimize`
 - If a previous failed create already wrote app metadata, rerun with `--force`.
 
 For small VPS hosts, remember:

@@ -182,6 +182,11 @@ larops create site example.com \
 - Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
 - Nếu release có `composer.json` nhưng chưa có `vendor/autoload.php`, LarOps sẽ tự chạy `composer install` ở build phase.
 - Nếu có `--with-db`, LarOps sẽ provision database/user của ứng dụng và ghi credential/password file trước khi deploy.
+- Khi source được deploy có file `artisan`, `create site` còn tự chạy bootstrap app sau deploy:
+  - `php artisan key:generate --force` chỉ khi `APP_KEY` còn thiếu
+  - `php artisan migrate --force`
+  - `php artisan optimize:clear`
+  - `php artisan optimize`
 - `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
 

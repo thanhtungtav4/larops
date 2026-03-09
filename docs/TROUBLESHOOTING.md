@@ -252,6 +252,25 @@ larops stack install --web --apply
 
 Then redeploy or recreate the site.
 
+## Do I still need to run `php artisan key:generate` and `migrate` manually?
+
+Usually no for a fresh `create site` run when the deployed source contains `artisan`.
+
+Current LarOps behavior:
+
+- auto-runs `composer install` when the release is missing `vendor/autoload.php`
+- auto-runs Laravel bootstrap after deploy:
+  - `key:generate` only when `APP_KEY` is missing
+  - `migrate --force`
+  - `optimize:clear`
+  - `optimize`
+
+Manual artisan commands are still useful when:
+
+- you are repairing an older release created before this behavior existed
+- you intentionally disabled or bypassed the normal create flow
+- your app requires additional project-specific setup commands
+
 ## `ssl issue` fails because `certbot` is missing
 
 Symptom:
