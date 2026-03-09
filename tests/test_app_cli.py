@@ -126,6 +126,10 @@ def test_app_info_non_json_prints_operator_summary(tmp_path: Path, monkeypatch) 
         "credential_file": "/tmp/demo.cnf",
         "password_file": "/tmp/demo.txt",
     }
+    payload["env_sync"] = {
+        "env_file": "/var/www/demo.test/shared/.env",
+        "updated_keys": ["DB_CONNECTION", "DB_HOST"],
+    }
     metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     monkeypatch.setattr("larops.commands.app.default_cert_file", lambda _domain: tmp_path / "fullchain.pem")
 
@@ -135,6 +139,7 @@ def test_app_info_non_json_prints_operator_summary(tmp_path: Path, monkeypatch) 
     assert "current release:" in info.stdout
     assert "profile preset: small-vps" in info.stdout
     assert "db name: demo_test" in info.stdout
+    assert "env file: /var/www/demo.test/shared/.env" in info.stdout
     assert "cert present: False" in info.stdout
 
 

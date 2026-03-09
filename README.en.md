@@ -607,6 +607,26 @@ Managed Nginx behavior:
 - With `-le`, LarOps first writes the HTTP vhost, issues the certificate, then rewrites the vhost for HTTPS.
 - Use `--no-nginx` if you intentionally manage ingress outside LarOps.
 
+Where to edit application environment after create:
+
+- Edit the shared environment file, not the release source tree:
+  - LarOps auto-syncs `DB_CONNECTION`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, and `DB_PASSWORD` into this file when `create site --with-db` succeeds.
+  - `/var/www/<domain>/shared/.env`
+- The current release usually sees:
+  - `/var/www/<domain>/current/.env`
+  - as a symlink into `shared/.env`
+- Do not treat `.larops/state/secrets/db/<domain>.cnf` or `.txt` as the app `.env`. Those files remain LarOps-managed DB secrets and audit references.
+
+Typical follow-up after editing `.env`:
+
+```bash
+cd /var/www/example.com/current
+php artisan key:generate --force
+php artisan migrate --force
+php artisan optimize:clear
+php artisan optimize
+```
+
 With profile preset and cache preset:
 
 ```bash
@@ -714,6 +734,15 @@ larops db restore-verify example.com --engine postgres --backup-file /path/backu
 larops db offsite restore-verify example.com --engine postgres --database appdb --apply
 larops db restore example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
+
+If `create site --with-db` was used, LarOps prints and stores:
+
+- DB name
+- DB user
+- DB credential file
+- DB password file
+
+LarOps already syncs those DB values into `/var/www/<domain>/shared/.env`. You only need to add the remaining app-specific variables.
 
 Offsite backup notes:
 

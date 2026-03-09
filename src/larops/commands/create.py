@@ -30,6 +30,11 @@ from larops.services.nginx_site_service import (
     capture_nginx_site_snapshot,
     restore_nginx_site_snapshot,
 )
+from larops.services.env_file_service import (
+    EnvFileServiceError,
+    database_env_updates,
+    upsert_env_values,
+)
 from larops.services.db_service import (
     DbServiceError,
     default_credential_file,
@@ -125,6 +130,7 @@ def _emit_create_site_summary(
     ssl_result: dict | None,
     nginx_result: dict | None,
     db_result: dict | None,
+    env_sync_result: dict | None,
 ) -> None:
     if app_ctx.json_output:
         return
@@ -159,6 +165,8 @@ def _emit_create_site_summary(
                 f"  db password file: {db_result['password_file']}",
             ]
         )
+    if env_sync_result is not None:
+        lines.append(f"  env file: {env_sync_result['env_file']}")
     for line in lines:
         app_ctx.emit_output("ok", line)
 
@@ -966,7 +974,9 @@ def create_site(
     ssl_result: dict | None = None
     nginx_result: dict | None = None
     db_result: dict | None = None
+    env_sync_result: dict | None = None
     db_provisioned = False
+    db_password_value: str | None = None
     existing_cert_file = default_cert_file(domain)
     existing_privkey_file = existing_cert_file.parent / "privkey.pem"
     existing_certificate_available = existing_cert_file.exists() and existing_privkey_file.exists()
@@ -986,6 +996,7 @@ def create_site(
             if db_provision_plan is not None:
                 password = os.getenv(db_password_env, "").strip() if db_password_env else ""
                 password = password or generate_database_password()
+                db_password_value = password
                 db_result = provision_database(
                     engine=str(db_provision_plan["engine"]),
                     database=str(db_provision_plan["database"]),
@@ -1008,6 +1019,22 @@ def create_site(
                 metadata["database_provision"] = db_result
                 save_metadata(paths.metadata, metadata)
 
+                if not deploy:
+                    env_sync_result = upsert_env_values(
+                        env_file=paths.shared / ".env",
+                        updates=database_env_updates(
+                            engine=str(db_result["engine"]),
+                            host=str(db_result["host"]),
+                            port=int(db_result["port"]),
+                            database=str(db_result["database"]),
+                            user=str(db_result["user"]),
+                            password=db_password_value or "",
+                        ),
+                    )
+                    metadata = load_metadata(paths.metadata)
+                    metadata["env_sync"] = env_sync_result
+                    save_metadata(paths.metadata, metadata)
+
             if deploy:
                 phase_commands = build_deploy_phase_commands(app_ctx.config.deploy)
                 release_id, release_dir = prepare_release_candidate(
@@ -1017,6 +1044,21 @@ def create_site(
                     shared_dirs=app_ctx.config.deploy.shared_dirs,
                     shared_files=app_ctx.config.deploy.shared_files,
                 )
+                if db_result is not None:
+                    env_sync_result = upsert_env_values(
+                        env_file=paths.shared / ".env",
+                        updates=database_env_updates(
+                            engine=str(db_result["engine"]),
+                            host=str(db_result["host"]),
+                            port=int(db_result["port"]),
+                            database=str(db_result["database"]),
+                            user=str(db_result["user"]),
+                            password=db_password_value or "",
+                        ),
+                    )
+                    metadata = load_metadata(paths.metadata)
+                    metadata["env_sync"] = env_sync_result
+                    save_metadata(paths.metadata, metadata)
                 build_reports = run_release_commands(
                     workdir=release_dir,
                     phase="build",
@@ -1130,7 +1172,16 @@ def create_site(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError, ReleaseServiceError, NginxSiteServiceError, DbServiceError) as exc:
+    except (
+        AppLifecycleError,
+        RuntimeProcessError,
+        SslServiceError,
+        ShellCommandError,
+        ReleaseServiceError,
+        NginxSiteServiceError,
+        DbServiceError,
+        EnvFileServiceError,
+    ) as exc:
         if atomic:
             rollback_steps = _atomic_rollback_create_site(
                 app_ctx=app_ctx,
@@ -1195,6 +1246,7 @@ def create_site(
         ssl_result=ssl_result,
         nginx_result=nginx_result,
         db_result=db_result,
+        env_sync_result=env_sync_result,
     )
     _emit_create_site_summary(
         app_ctx,
@@ -1205,4 +1257,5 @@ def create_site(
         ssl_result=ssl_result,
         nginx_result=nginx_result,
         db_result=db_result,
+        env_sync_result=env_sync_result,
     )

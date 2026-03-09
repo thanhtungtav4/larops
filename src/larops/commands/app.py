@@ -72,6 +72,7 @@ def _build_app_info_report(*, domain: str, paths: Path, releases: list[str], cur
     profile = metadata.get("profile") if isinstance(metadata.get("profile"), dict) else None
     last_deploy = metadata.get("last_deploy") if isinstance(metadata.get("last_deploy"), dict) else None
     database_provision = metadata.get("database_provision") if isinstance(metadata.get("database_provision"), dict) else None
+    env_sync = metadata.get("env_sync") if isinstance(metadata.get("env_sync"), dict) else None
 
     return {
         "domain": domain,
@@ -101,6 +102,7 @@ def _build_app_info_report(*, domain: str, paths: Path, releases: list[str], cur
             "health_check": last_deploy.get("health_check") if last_deploy else None,
         },
         "database_provision": database_provision,
+        "env_sync": env_sync,
         "web": {
             "nginx_server_config_file": str(nginx_paths.server_config_file),
             "nginx_enabled_site_file": str(nginx_paths.enabled_site_file),
@@ -122,6 +124,7 @@ def _emit_app_info_summary(app_ctx: AppContext, *, report: dict) -> None:
     web = report["web"]
     profile = report.get("profile")
     db_provision = report.get("database_provision")
+    env_sync = report.get("env_sync")
 
     lines = [
         f"  app root: {paths['root']}",
@@ -175,6 +178,8 @@ def _emit_app_info_summary(app_ctx: AppContext, *, report: dict) -> None:
                 f"  db password file: {db_provision.get('password_file', 'unknown')}",
             ]
         )
+    if env_sync:
+        lines.append(f"  env file: {env_sync.get('env_file', 'unknown')}")
     for line in lines:
         app_ctx.emit_output("ok", line)
 

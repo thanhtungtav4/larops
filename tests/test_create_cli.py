@@ -42,6 +42,7 @@ def make_source(tmp_path: Path, domain: str) -> Path:
     source = tmp_path / "sources" / domain
     source.mkdir(parents=True, exist_ok=True)
     (source / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+    (source / ".env").write_text("APP_NAME=Demo\nAPP_ENV=local\n", encoding="utf-8")
     return source
 
 
@@ -459,7 +460,15 @@ def test_create_site_apply_with_db_provisions_database_and_persists_metadata(tmp
     assert captured["engine"] == "mysql"
     metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
     assert metadata["database_provision"]["database"] == "demo_test"
+    assert metadata["env_sync"]["env_file"].endswith("/shared/.env")
+    shared_env = tmp_path / "apps" / "demo.test" / "shared" / ".env"
+    env_body = shared_env.read_text(encoding="utf-8")
+    assert "APP_NAME=Demo" in env_body
+    assert "DB_CONNECTION=mysql" in env_body
+    assert "DB_DATABASE=demo_test" in env_body
+    assert "DB_USERNAME=demo_test" in env_body
     assert "db credential file:" in result.stdout
+    assert "env file:" in result.stdout
 
 
 def test_create_site_atomic_with_db_rolls_back_database_on_follow_up_failure(tmp_path: Path, monkeypatch) -> None:

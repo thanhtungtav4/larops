@@ -248,6 +248,26 @@ sudo larops --config /etc/larops/larops.yaml create site example.com \
   --apply
 ```
 
+Application environment file:
+
+- Edit `/var/www/<domain>/shared/.env`
+- Do not edit old release directories under `releases/`
+- `/var/www/<domain>/current/.env` is typically a symlink into `shared/.env`
+- If `create site --with-db` provisioned the DB, LarOps already syncs the DB settings into `shared/.env`.
+- The DB secret files are still useful as references:
+  - `.larops/state/secrets/db/<domain>.txt`
+  - `.larops/state/secrets/db/<domain>.cnf`
+
+Typical Laravel follow-up after editing `.env`:
+
+```bash
+cd /var/www/example.com/current
+php artisan key:generate --force
+php artisan migrate --force
+php artisan optimize:clear
+php artisan optimize
+```
+
 Enable runtime:
 
 ```bash

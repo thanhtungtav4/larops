@@ -507,6 +507,26 @@ Hành vi Nginx mặc định:
 - Có `-le`: LarOps tạo vhost HTTP trước, issue cert, rồi rewrite sang HTTPS.
 - Dùng `--no-nginx` nếu bạn chủ động quản lý ingress bên ngoài LarOps.
 
+Sửa biến môi trường ứng dụng ở đâu sau khi create:
+
+- Hãy sửa file shared `.env`, không sửa source tree của release:
+  - Khi `create site --with-db` thành công, LarOps tự sync `DB_CONNECTION`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` vào file này.
+  - `/var/www/<domain>/shared/.env`
+- Release hiện tại thường nhìn thấy:
+  - `/var/www/<domain>/current/.env`
+  - dưới dạng symlink trỏ về `shared/.env`
+- Không dùng `.larops/state/secrets/db/<domain>.cnf` hay `.txt` như app `.env`. Đây vẫn là secret/audit file do LarOps quản lý.
+
+Sau khi sửa `.env`, flow thường dùng là:
+
+```bash
+cd /var/www/example.com/current
+php artisan key:generate --force
+php artisan migrate --force
+php artisan optimize:clear
+php artisan optimize
+```
+
 Theo preset Laravel + Redis:
 
 ```bash
@@ -593,6 +613,15 @@ larops db credential set example.com --engine postgres --user appuser --apply
 larops db backup example.com --engine postgres --database appdb --apply
 larops db restore-verify example.com --engine postgres --backup-file /path/backup.sql.gz --database appdb --apply
 ```
+
+Nếu bạn dùng `create site --with-db`, LarOps sẽ in và lưu:
+
+- tên database
+- tên user
+- file credential DB
+- file password DB
+
+LarOps đã tự sync các giá trị DB đó vào `/var/www/<domain>/shared/.env`. Bạn chỉ cần bổ sung các biến riêng của ứng dụng.
 
 Ghi nhớ:
 

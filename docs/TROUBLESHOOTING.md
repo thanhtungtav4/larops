@@ -146,6 +146,28 @@ larops create site example.com --force --apply
 
 Use `--force` for recovery or deliberate recreation, not as the normal day-to-day path for a healthy app.
 
+## Where is the real `.env` after `create site`?
+
+Meaning:
+
+- LarOps uses the shared file:
+  - `/var/www/<domain>/shared/.env`
+- The current release usually has:
+  - `/var/www/<domain>/current/.env`
+  - as a symlink to the shared file
+- If `create site --with-db` succeeded, LarOps already synced the main `DB_*` variables into `shared/.env`
+
+Use this rule:
+
+- edit `shared/.env`
+- do not edit old release directories
+- do not confuse LarOps DB secret files with the Laravel `.env`
+
+If the database was provisioned by LarOps and you want to audit the generated credentials, inspect:
+
+- `.larops/state/secrets/db/<domain>.txt`
+- `.larops/state/secrets/db/<domain>.cnf`
+
 ## `create site --with-db` fails because the database or user already exists
 
 Symptom:
