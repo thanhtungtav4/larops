@@ -27,7 +27,15 @@ def run_command(
         ) from exc
     if check and completed.returncode != 0:
         quoted = shlex.join(command)
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        detail_parts: list[str] = []
+        if stderr:
+            detail_parts.append(stderr)
+        if stdout:
+            detail_parts.append(stdout if not stderr else f"stdout:\n{stdout}")
+        detail = "\n".join(detail_parts).strip()
         raise ShellCommandError(
-            f"command failed ({completed.returncode}): {quoted}\n{completed.stderr.strip()}"
+            f"command failed ({completed.returncode}): {quoted}" + (f"\n{detail}" if detail else "")
         )
     return completed
