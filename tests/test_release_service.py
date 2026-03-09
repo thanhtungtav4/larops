@@ -126,3 +126,33 @@ def test_prepare_release_candidate_bootstraps_laravel_runtime_directories(tmp_pa
     assert (release_dir / "storage" / "app" / "public").is_dir()
     assert (paths.shared / "storage" / "framework" / "views").is_dir()
     assert (paths.shared / "bootstrap" / "cache").is_dir()
+
+
+def test_prepare_release_candidate_clears_stale_laravel_bootstrap_cache_files(tmp_path: Path) -> None:
+    state_path = tmp_path / "state"
+    paths = get_app_paths(tmp_path / "apps", state_path, "demo.test")
+    initialize_app(paths, {"domain": "demo.test"})
+    stale_cache_dir = paths.shared / "bootstrap" / "cache"
+    stale_cache_dir.mkdir(parents=True, exist_ok=True)
+    (stale_cache_dir / "config.php").write_text("<?php return ['db' => 'localhost'];", encoding="utf-8")
+    (stale_cache_dir / "packages.php").write_text("<?php return [];", encoding="utf-8")
+    (stale_cache_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+
+    source = tmp_path / "source"
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+    (source / ".env").write_text("APP_ENV=production\n", encoding="utf-8")
+
+    _, release_dir = prepare_release_candidate(
+        paths=paths,
+        source_path=source,
+        ref="main",
+        shared_dirs=["storage", "bootstrap/cache"],
+        shared_files=[".env"],
+    )
+
+    cache_dir = release_dir / "bootstrap" / "cache"
+    assert cache_dir.is_dir()
+    assert not (cache_dir / "config.php").exists()
+    assert not (cache_dir / "packages.php").exists()
+    assert (cache_dir / ".gitignore").exists()

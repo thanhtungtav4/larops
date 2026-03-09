@@ -71,6 +71,17 @@ def _ensure_laravel_runtime_paths(release_dir: Path) -> None:
         (release_dir / relative_path).mkdir(parents=True, exist_ok=True)
 
 
+def _clear_laravel_bootstrap_cache(release_dir: Path) -> None:
+    if not (release_dir / "artisan").exists():
+        return
+    cache_dir = release_dir / "bootstrap" / "cache"
+    if not cache_dir.exists():
+        return
+    for cache_file in cache_dir.glob("*.php"):
+        if cache_file.is_file() or cache_file.is_symlink():
+            cache_file.unlink(missing_ok=True)
+
+
 def prepare_release_candidate(
     *,
     paths: AppPaths,
@@ -89,6 +100,7 @@ def prepare_release_candidate(
         if cleaned:
             _ensure_shared_file(paths, release_dir, cleaned)
     _ensure_laravel_runtime_paths(release_dir)
+    _clear_laravel_bootstrap_cache(release_dir)
     return release_id, release_dir
 
 
