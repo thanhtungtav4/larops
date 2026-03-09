@@ -171,6 +171,7 @@ What `create site` does on a fresh host:
 - If the source directory is missing and `--git-url` is provided, LarOps clones the repository into `deploy.source_base_path/<domain>` first.
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
+- If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
 - Composer build install runs with `--no-scripts`; Laravel package discovery is deferred to the app bootstrap phase after `.env` and release symlinks are ready.
 - Use the same `--php` value on host bootstrap and site create so Nginx/FPM matches the installed PHP runtime.
 - On Ubuntu and Debian, LarOps auto-prepares the matching external PHP repository when the pinned version is newer than the distro default.

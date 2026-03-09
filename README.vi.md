@@ -190,6 +190,7 @@ larops create site example.com \
 - Nếu source còn thiếu và có `--git-url`, LarOps sẽ clone repo vào `deploy.source_base_path/<domain>` trước.
 - Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
 - Nếu release có `composer.json` nhưng chưa có `vendor/autoload.php`, LarOps sẽ tự chạy `composer install` ở build phase.
+- Nếu release có `package.json`, có `vite.config.*`, và chưa có `public/build/manifest.json`, LarOps sẽ tự chạy `npm ci|install` và `npm run build` ở build phase.
 - Composer ở build phase chạy với `--no-scripts`; phần Laravel package discovery được dời sang bootstrap app sau khi `.env` và symlink release đã sẵn sàng.
 - Nên dùng cùng giá trị `--php` ở bước bootstrap host và create site để Nginx/FPM khớp đúng runtime đã cài.
 - Trên Ubuntu và Debian, LarOps sẽ tự chuẩn bị external PHP repository tương ứng khi version pin mới hơn mặc định của distro.

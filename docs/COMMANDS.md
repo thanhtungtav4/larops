@@ -97,13 +97,14 @@ When `larops create site <domain>` runs:
 4. If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
 5. If `--with-db` is set and the effective site has a real DB engine, LarOps provisions the application DB/user and writes the app credential/password files.
 6. If the release contains `composer.json` but is missing `vendor/autoload.php`, LarOps runs `composer install --no-scripts` during the build phase.
-7. If the deployed source contains `artisan`, LarOps auto-runs:
+7. If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps runs `npm ci|install` and `npm run build` during the build phase.
+8. If the deployed source contains `artisan`, LarOps auto-runs:
    - `php artisan key:generate --force` when `APP_KEY` is missing
    - `php artisan package:discover --ansi`
    - `php artisan migrate --force`
    - `php artisan optimize:clear`
    - `php artisan optimize`
-8. If a previous failed create already wrote app metadata, rerun with `--force`.
+9. If a previous failed create already wrote app metadata, rerun with `--force`.
 
 `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally want an off-host database.
 

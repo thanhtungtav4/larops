@@ -252,6 +252,35 @@ larops stack install --web --apply
 
 Then redeploy or recreate the site.
 
+## Laravel app fails with `Vite manifest not found`
+
+Symptom:
+
+```text
+Illuminate\Foundation\ViteManifestNotFoundException
+Vite manifest not found at: .../public/build/manifest.json
+```
+
+Meaning:
+
+- The app expects a Vite build artifact.
+- Current LarOps now auto-builds frontend assets during the release build phase when:
+  - `package.json` exists
+  - a `vite.config.*` file exists
+  - `public/build/manifest.json` is missing
+- The host still needs Node.js/npm in the web stack.
+
+Fix:
+
+```bash
+larops stack install --web --php 8.4 --apply
+larops create site example.com --php 8.4 --git-url https://github.com/acme/example-app.git --force --apply
+```
+
+If the app targets PHP 8.3 instead, use `--php 8.3` or omit `--php`.
+
+If you intentionally commit built assets to the repository, LarOps will skip the auto-build path as long as `public/build/manifest.json` already exists in the release.
+
 ## Do I still need to run `php artisan key:generate` and `migrate` manually?
 
 Usually no for a fresh `create site` run when the deployed source contains `artisan`.

@@ -27,6 +27,12 @@ _LARAVEL_RUNTIME_DIRS = (
     "storage/logs",
     "bootstrap/cache",
 )
+_VITE_CONFIG_FILES = (
+    "vite.config.js",
+    "vite.config.ts",
+    "vite.config.mjs",
+    "vite.config.cjs",
+)
 
 
 def _remove_path(path: Path) -> None:
@@ -119,15 +125,37 @@ def _composer_install_command(config: DeployConfig) -> str:
     return " ".join(["COMPOSER_ALLOW_SUPERUSER=1", config.composer_binary, *flags])
 
 
+def _npm_install_command(release_dir: Path) -> str:
+    if (release_dir / "package-lock.json").exists() or (release_dir / "npm-shrinkwrap.json").exists():
+        return "npm ci --no-audit --no-fund"
+    return "npm install --no-audit --no-fund"
+
+
+def _should_auto_build_frontend(release_dir: Path) -> bool:
+    if not (release_dir / "package.json").exists():
+        return False
+    if not any((release_dir / config_name).exists() for config_name in _VITE_CONFIG_FILES):
+        return False
+    return not (release_dir / "public" / "build" / "manifest.json").exists()
+
+
+def _has_explicit_frontend_build(commands: list[str]) -> bool:
+    normalized = [command.strip().lower() for command in commands if command.strip()]
+    for command in normalized:
+        if "npm run build" in command or "vite build" in command:
+            return True
+    return False
+
+
 def resolve_build_commands_for_release(*, config: DeployConfig, release_dir: Path, commands: list[str]) -> list[str]:
     resolved = list(commands)
-    if any(command.strip().startswith(f"{config.composer_binary} install") for command in resolved):
-        return resolved
-    if not (release_dir / "composer.json").exists():
-        return resolved
-    if (release_dir / "vendor" / "autoload.php").exists():
-        return resolved
-    return [_composer_install_command(config), *resolved]
+    auto_commands: list[str] = []
+    if not any(command.strip().startswith(f"{config.composer_binary} install") for command in resolved):
+        if (release_dir / "composer.json").exists() and not (release_dir / "vendor" / "autoload.php").exists():
+            auto_commands.append(_composer_install_command(config))
+    if _should_auto_build_frontend(release_dir) and not _has_explicit_frontend_build(resolved):
+        auto_commands.extend([_npm_install_command(release_dir), "npm run build"])
+    return [*auto_commands, *resolved]
 
 
 def build_deploy_phase_commands(config: DeployConfig) -> dict[str, list[str]]:

@@ -85,6 +85,7 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
 - `create site --with-db` can provision the application database, user, credential file, and password file in the same flow.
 - `create site --with-db` also syncs the main `DB_*` variables into `/var/www/<domain>/shared/.env`.
 - If the release contains `composer.json` but is missing `vendor/autoload.php`, LarOps auto-runs `composer install --no-scripts` during the build phase.
+- If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
 - When the deployed source contains `artisan`, LarOps auto-runs the first Laravel bootstrap after deploy:
   - `php artisan key:generate --force` when needed
   - `php artisan package:discover --ansi`

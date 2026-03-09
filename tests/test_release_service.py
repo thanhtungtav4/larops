@@ -87,6 +87,47 @@ def test_resolve_build_commands_for_release_auto_adds_composer_install(tmp_path:
     assert commands == ["COMPOSER_ALLOW_SUPERUSER=1 composer install --no-interaction --no-progress --no-scripts --no-dev --optimize-autoloader"]
 
 
+def test_resolve_build_commands_for_release_auto_adds_vite_build_with_package_lock(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    (release_dir / "public" / "build").mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
+    assert commands == ["npm ci --no-audit --no-fund", "npm run build"]
+
+
+def test_resolve_build_commands_for_release_skips_vite_auto_build_when_manifest_exists(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    (release_dir / "public" / "build").mkdir(parents=True, exist_ok=True)
+    (release_dir / "public" / "build" / "manifest.json").write_text("{}", encoding="utf-8")
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
+    assert commands == []
+
+
+def test_resolve_build_commands_for_release_skips_vite_auto_build_when_explicit_build_exists(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    (release_dir / "public" / "build").mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(
+        config=config,
+        release_dir=release_dir,
+        commands=["npm run build", "echo done"],
+    )
+    assert commands == ["npm run build", "echo done"]
+
+
 def test_resolve_build_commands_for_release_skips_when_vendor_exists(tmp_path: Path) -> None:
     release_dir = tmp_path / "release"
     (release_dir / "vendor").mkdir(parents=True, exist_ok=True)
@@ -96,6 +137,23 @@ def test_resolve_build_commands_for_release_skips_when_vendor_exists(tmp_path: P
 
     commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
     assert commands == []
+
+
+def test_resolve_build_commands_for_release_combines_composer_and_vite_steps(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    (release_dir / "public" / "build").mkdir(parents=True, exist_ok=True)
+    (release_dir / "composer.json").write_text("{}", encoding="utf-8")
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
+    assert commands == [
+        "COMPOSER_ALLOW_SUPERUSER=1 composer install --no-interaction --no-progress --no-scripts --no-dev --optimize-autoloader",
+        "npm ci --no-audit --no-fund",
+        "npm run build",
+    ]
 
 
 def test_prepare_release_candidate_bootstraps_laravel_runtime_directories(tmp_path: Path) -> None:
