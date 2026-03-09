@@ -147,13 +147,6 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
-Small VPS with local DB:
-
-```bash
-larops bootstrap init --profile small-vps --data --apply
-larops create site example.com --profile small-vps --with-db --apply
-```
-
 Git source plus DB bootstrap:
 
 ```bash
@@ -169,6 +162,7 @@ What `create site` does on a fresh host:
 - If the source directory is missing and `--git-url` is provided, LarOps clones the repository into `deploy.source_base_path/<domain>` first.
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
 - If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
+- `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
 
 Install pinned version after a GitHub release exists:

@@ -227,8 +227,8 @@ Source preparation rules:
 
 For small VPS hosts, remember:
 
-- `bootstrap init --profile small-vps` does not install the local `data` stack.
-- If you want `create site --with-db` to provision a local MariaDB database on the same VPS, bootstrap with `--data`.
+- `bootstrap init --profile small-vps` includes the local `data` stack by default.
+- Use `--no-data` only if you intentionally want the application to use an off-host database.
 
 Managed web ingress rules:
 

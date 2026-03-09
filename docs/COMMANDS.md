@@ -66,13 +66,6 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
-### Weak VPS with local DB
-
-```bash
-larops bootstrap init --profile small-vps --data --apply
-larops create site example.com --profile small-vps --with-db --apply
-```
-
 ### Existing app source
 
 ```bash
@@ -104,6 +97,8 @@ When `larops create site <domain>` runs:
 4. If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
 5. If `--with-db` is set and the effective site has a real DB engine, LarOps provisions the application DB/user and writes the app credential/password files.
 6. If a previous failed create already wrote app metadata, rerun with `--force`.
+
+`bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally want an off-host database.
 
 ## Production Scope
 

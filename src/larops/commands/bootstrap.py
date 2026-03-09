@@ -54,7 +54,7 @@ _BOOTSTRAP_PROFILES: dict[str, dict[str, object]] = {
     "small-vps": {
         "groups": {
             "web": True,
-            "data": False,
+            "data": True,
             "postgres": False,
             "ops": True,
         },

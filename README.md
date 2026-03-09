@@ -49,13 +49,6 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
-Weak VPS with local DB:
-
-```bash
-larops bootstrap init --profile small-vps --data --apply
-larops create site example.com --profile small-vps --with-db --apply
-```
-
 ## Command Overview
 
 | Group | Purpose | Example |
@@ -83,6 +76,7 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
   - Git clone with `--git-url`
   - automatic Laravel scaffold with `composer create-project` when the site resolves to a Laravel-family profile
 - `create site --with-db` can provision the application database, user, credential file, and password file in the same flow.
+- `bootstrap init --profile small-vps` now includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - When deploy is enabled, `create site` also provisions a managed Nginx site config by default on supported single-node hosts.
 - If a previous `create site` run created metadata but did not finish provisioning, rerun with `--force`.
 

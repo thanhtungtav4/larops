@@ -192,14 +192,14 @@ mysql: command not found
 Meaning:
 
 - The host does not have the local MySQL/MariaDB client installed.
-- This is expected if you bootstrapped with `--profile small-vps` without `--data`.
+- This usually means the host was bootstrapped before the small-vps default changed, or you explicitly used `--no-data`.
 
 Fix:
 
 If you want a local DB on the same VPS:
 
 ```bash
-larops bootstrap init --profile small-vps --data --apply
+larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --with-db --force --apply
 ```
 

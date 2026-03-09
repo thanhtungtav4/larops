@@ -166,13 +166,6 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
-VPS yếu nhưng vẫn muốn local DB:
-
-```bash
-larops bootstrap init --profile small-vps --data --apply
-larops create site example.com --profile small-vps --with-db --apply
-```
-
 Lấy source từ Git và tạo DB luôn:
 
 ```bash
@@ -188,6 +181,7 @@ larops create site example.com \
 - Nếu source còn thiếu và có `--git-url`, LarOps sẽ clone repo vào `deploy.source_base_path/<domain>` trước.
 - Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
 - Nếu có `--with-db`, LarOps sẽ provision database/user của ứng dụng và ghi credential/password file trước khi deploy.
+- `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
 
 Local development:

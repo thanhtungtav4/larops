@@ -42,7 +42,7 @@ def test_bootstrap_plan_mode(tmp_path: Path) -> None:
     assert "Bootstrap plan prepared." in result.stdout
 
 
-def test_bootstrap_small_vps_profile_skips_data_stack_by_default(tmp_path: Path) -> None:
+def test_bootstrap_small_vps_profile_includes_data_stack_by_default(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(
         app,
@@ -52,20 +52,20 @@ def test_bootstrap_small_vps_profile_skips_data_stack_by_default(tmp_path: Path)
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[0])
     assert payload["profile"] == "small-vps"
-    assert payload["stack_groups"] == ["web", "ops"]
-    assert payload["group_defaults"] == {"web": True, "data": False, "postgres": False, "ops": True}
+    assert payload["stack_groups"] == ["web", "data", "ops"]
+    assert payload["group_defaults"] == {"web": True, "data": True, "postgres": False, "ops": True}
 
 
-def test_bootstrap_small_vps_profile_allows_explicit_data_override(tmp_path: Path) -> None:
+def test_bootstrap_small_vps_profile_allows_explicit_no_data_override(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(
         app,
-        ["--config", str(config), "--json", "bootstrap", "init", "--profile", "small-vps", "--data"],
+        ["--config", str(config), "--json", "bootstrap", "init", "--profile", "small-vps", "--no-data"],
         env=linux_env(tmp_path),
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[0])
-    assert payload["stack_groups"] == ["web", "data", "ops"]
+    assert payload["stack_groups"] == ["web", "ops"]
 
 
 def test_bootstrap_apply_with_domain_and_skip_stack(tmp_path: Path) -> None:
