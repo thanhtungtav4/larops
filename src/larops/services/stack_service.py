@@ -15,6 +15,7 @@ class StackServiceError(RuntimeError):
 DEBIAN_PACKAGE_GROUPS = {
     "web": [
         "nginx",
+        "certbot",
         "php8.3-fpm",
         "php8.3-cli",
         "php8.3-mbstring",
@@ -30,6 +31,7 @@ DEBIAN_PACKAGE_GROUPS = {
 EL9_COMMON_PACKAGE_GROUPS = {
     "web": [
         "nginx",
+        "certbot",
         "php-fpm",
         "php-cli",
         "php-mbstring",

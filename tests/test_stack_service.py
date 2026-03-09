@@ -45,6 +45,7 @@ def test_build_install_commands_use_platform_package_manager(tmp_path: Path) -> 
     commands = build_install_commands(["web", "ops"], platform=platform)
     assert commands[0] == ["apt-get", "update"]
     assert commands[1][0:3] == ["apt-get", "install", "-y"]
+    assert "certbot" in commands[1]
     assert "nginx" in commands[1]
     assert "ufw" in commands[1]
 
@@ -57,6 +58,7 @@ def test_build_install_commands_use_dnf_for_rocky_9_and_enable_epel_for_ops(tmp_
     assert commands[1] == ["dnf", "install", "-y", "epel-release"]
     assert commands[2] == ["dnf", "makecache", "-y"]
     assert commands[3][0:3] == ["dnf", "install", "-y"]
+    assert "certbot" in commands[3]
     assert "nginx" in commands[3]
     assert "firewalld" in commands[3]
     assert "fail2ban" in commands[3]

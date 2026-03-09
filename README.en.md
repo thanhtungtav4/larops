@@ -6,6 +6,8 @@ Language:
 
 - Landing page: [README.md](README.md)
 - Vietnamese manual: [README.vi.md](README.vi.md)
+- Command index: [docs/COMMANDS.md](docs/COMMANDS.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ## Table of Contents
 
@@ -145,6 +147,13 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+What `create site` does on a fresh host:
+
+- If `deploy.source_base_path/<domain>` already exists, LarOps deploys from that local source tree.
+- If the source directory is missing and `--git-url` is provided, LarOps clones the repository into `deploy.source_base_path/<domain>` first.
+- If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
+- If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
+
 Install pinned version after a GitHub release exists:
 
 ```bash
@@ -210,7 +219,7 @@ This section exists to remove ambiguity. Several LarOps commands sound similar, 
 What it does:
 
 - Optionally installs the selected host package groups:
-  - `web` = `nginx`, PHP-FPM and core PHP extensions
+  - `web` = `nginx`, `certbot`, PHP-FPM and core PHP extensions
   - `data` = `mariadb-server`, `redis-server`
   - `postgres` = `postgresql`
   - `ops` = `fail2ban` plus the host firewall backend (`ufw` on Debian/Ubuntu, `firewalld` on EL9)
@@ -226,13 +235,14 @@ What it does not do by itself:
 - It does not fully replace `site create`.
 - It does not automatically issue SSL certificates.
 - It does not automatically enable runtime processes unless you later run site/runtime commands.
-- It does not create a complete production vhost flow for a Laravel app on its own.
+- It does not replace broader reverse-proxy, CDN, or multi-node ingress design.
 
 Practical interpretation:
 
 - Use `bootstrap init` to prepare a fresh host.
 - Use `site create` when you want an application-oriented create flow.
 - On a weak VPS, start with `larops bootstrap init --profile small-vps --apply`.
+- Generated default config may include secret-file paths for disabled features; those files are only required once the matching feature is enabled.
 
 ### `larops site create`
 
@@ -248,6 +258,12 @@ What it does:
   - `worker=false`
   - `scheduler=true`
   - `horizon=false`
+- On supported single-node hosts, it provisions a managed Nginx site config automatically when deploy is enabled.
+- Resolves source using this order:
+  - `--source` when provided
+  - otherwise `deploy.source_base_path/<domain>`
+  - if that path is missing and `--git-url` is set, clone into it
+  - if that path is missing and the effective site is Laravel-family, scaffold it with `composer create-project`
 - Can issue Let's Encrypt certificates when `-le` is used.
 - Supports `--atomic` rollback for safer first-site creation.
 
@@ -554,7 +570,30 @@ larops site create example.com --apply
 
 Default source behavior:
 
-- If `--source` is omitted, LarOps deploys from `deploy.source_base_path/<domain>`.
+- If `--source` is omitted, LarOps first looks for `deploy.source_base_path/<domain>`.
+- If that directory does not exist and `--git-url` is set, LarOps clones into it before deploy.
+- If that directory does not exist and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
+- If that directory does not exist for a non-Laravel site and no `--git-url` is provided, the command fails and asks for `--source` or `--git-url`.
+
+Create directly from Git:
+
+```bash
+larops create site example.com --git-url https://github.com/acme/example-app.git --apply
+```
+
+Bootstrap a fresh Laravel skeleton on a weak VPS:
+
+```bash
+larops create site example.com --profile small-vps --apply
+```
+
+Managed Nginx behavior:
+
+- When deploy is enabled, `create site` provisions a managed Nginx site config by default.
+- Without `-le`, the generated vhost serves HTTP.
+- If a valid certificate already exists for the domain, LarOps binds HTTPS even without reissuing a new certificate.
+- With `-le`, LarOps first writes the HTTP vhost, issues the certificate, then rewrites the vhost for HTTPS.
+- Use `--no-nginx` if you intentionally manage ingress outside LarOps.
 
 With profile preset and cache preset:
 
@@ -968,6 +1007,7 @@ After tag push, GitHub release pipeline runs automatically.
 - `site delete` requires explicit safety guards.
 - Prefer secret files over plain env for credentials/tokens.
 - Keep secret files permissioned as owner-only (`0600`).
+- Secret-file paths can safely exist in config while the feature is disabled. LarOps only reads them once the matching feature is enabled or explicitly overridden.
 - Use `--atomic` on `site create` for rollback on failure path.
 - Prefer pinned installer (`LAROPS_VERSION=x.y.z`) with checksum verification.
 
@@ -999,11 +1039,68 @@ Fix:
 
 Root cause:
 
-- `bot_token_file` or `chat_id_file` path missing/empty.
+- Telegram was actually enabled, or explicit overrides forced LarOps to read `bot_token_file` / `chat_id_file`, and the file is missing or empty.
 
 Fix:
 
-- Create file, add value, set permission `600`, retry.
+- If Telegram is disabled, leave it disabled and the secret files do not need to exist.
+- If Telegram should be enabled, create the files, add real values, set permission `600`, then retry.
+
+### `create site` fails with "Source path does not exist or is not a directory"
+
+Root cause:
+
+- `--source` was omitted, `deploy.source_base_path/<domain>` does not exist yet, and LarOps could not infer how to create the source.
+
+Fix:
+
+- Provide a real source directory:
+  - `larops create site <domain> --source /path/to/app --apply`
+- Or clone from Git:
+  - `larops create site <domain> --git-url https://github.com/org/repo.git --apply`
+- Or use a Laravel-family site/profile so LarOps can scaffold the source automatically:
+  - `larops create site <domain> --profile small-vps --apply`
+
+### `create site` says "Application already exists. Use --force to recreate metadata."
+
+Root cause:
+
+- A previous `create site` run already created `state/apps/<domain>.json`, but provisioning did not finish.
+
+Fix:
+
+- Inspect the current metadata if needed:
+  - `larops --json app info <domain>`
+- If the app is not actually provisioned yet, rerun with:
+  - `larops create site <domain> --force --apply`
+- Reserve `--force` for recovery or deliberate recreation, not normal healthy updates.
+
+### `larops` cannot execute after install
+
+Root cause:
+
+- This usually means the host still has an older install created before the virtualenv relocation fix.
+
+Fix:
+
+- Rerun the current installer:
+  - `curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | sudo bash`
+- Or rebuild `/opt/larops/.venv` in place and refresh `/usr/local/bin/larops`.
+
+### `ssl issue` fails with `certbot` not found
+
+Root cause:
+
+- The host was bootstrapped with an older LarOps version before `certbot` was added to the default web stack, or `certbot` was removed manually.
+
+Fix:
+
+- Install the current web stack again:
+  - `larops stack install --web --apply`
+- Or rerun host bootstrap:
+  - `larops bootstrap init --apply`
+- Then retry:
+  - `larops ssl issue <domain> --challenge http --apply`
 
 ### Release workflow fails on version mismatch
 

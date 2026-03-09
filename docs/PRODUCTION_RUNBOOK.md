@@ -31,6 +31,15 @@ For a weak VPS that should avoid local DB/Redis by default:
 sudo larops bootstrap init --profile small-vps --apply
 ```
 
+Notes:
+
+- The current `web` stack installs `nginx`, `certbot`, PHP-FPM, and core PHP extensions.
+- If this host was bootstrapped with an older LarOps build before `certbot` was added to the default web stack, repair it with:
+
+```bash
+sudo larops --config /etc/larops/larops.yaml stack install --web --apply
+```
+
 ## 3) Configure LarOps
 
 Edit `/etc/larops/larops.yaml`:
@@ -194,11 +203,39 @@ Or short command (create + deploy):
 
 ```bash
 sudo larops --config /etc/larops/larops.yaml create site example.com --apply
+sudo larops --config /etc/larops/larops.yaml create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --apply
 sudo larops --config /etc/larops/larops.yaml create site example.com -le --le-email ops@example.com --apply
 sudo larops --config /etc/larops/larops.yaml ssl auto-renew enable --apply
 sudo larops --config /etc/larops/larops.yaml site create example.com -a
 sudo larops --config /etc/larops/larops.yaml site runtime disable example.com -a
 sudo larops --config /etc/larops/larops.yaml site runtime status example.com
+```
+
+Source preparation rules:
+
+- If `--source` is omitted, LarOps first uses `deploy.source_base_path/<domain>`.
+- If that directory is missing and `--git-url` is set, LarOps clones into it before deploy.
+- If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
+- If a previous failed create already wrote app metadata, rerun with `--force`.
+
+Managed web ingress rules:
+
+- When deploy is enabled, `create site` provisions a managed Nginx site config by default.
+- Without `-le`, the site is served over HTTP.
+- If a certificate already exists for the domain, LarOps binds HTTPS without reissuing it.
+- With `-le`, LarOps writes the HTTP vhost first, issues the certificate, then rewrites the site for HTTPS.
+- Use `--no-nginx` only when you intentionally manage ingress outside LarOps.
+
+Recovery example when metadata already exists:
+
+```bash
+sudo larops --config /etc/larops/larops.yaml --json app info example.com
+sudo larops --config /etc/larops/larops.yaml create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --force \
+  --apply
 ```
 
 Enable runtime:

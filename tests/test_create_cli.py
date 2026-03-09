@@ -327,6 +327,75 @@ def test_create_site_apply_creates_and_deploys(tmp_path: Path) -> None:
     assert payload["releases_count"] == 1
 
 
+def test_create_site_apply_provisions_nginx_by_default_when_deploying(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    captured: list[dict[str, object]] = []
+
+    def fake_apply_nginx_site_config(**kwargs):
+        captured.append(kwargs)
+        return {"managed": True, **kwargs}
+
+    monkeypatch.setattr("larops.commands.create.apply_nginx_site_config", fake_apply_nginx_site_config)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0]["domain"] == "demo.test"
+    assert captured[0]["https_enabled"] is False
+
+
+def test_create_site_apply_with_letsencrypt_rewrites_nginx_to_https(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    captured: list[dict[str, object]] = []
+
+    def fake_apply_nginx_site_config(**kwargs):
+        captured.append(kwargs)
+        return {"managed": True, **kwargs}
+
+    monkeypatch.setattr("larops.commands.create.apply_nginx_site_config", fake_apply_nginx_site_config)
+    monkeypatch.setattr("larops.commands.create.run_issue", lambda _command: "ok")
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "-le", "--apply"],
+    )
+    assert result.exit_code == 0
+    assert [item["https_enabled"] for item in captured] == [False, True]
+
+
+def test_create_site_apply_uses_existing_certificate_for_https_vhost(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    cert_dir = tmp_path / "letsencrypt" / "demo.test"
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    (cert_dir / "fullchain.pem").write_text("cert", encoding="utf-8")
+    (cert_dir / "privkey.pem").write_text("key", encoding="utf-8")
+    captured: list[dict[str, object]] = []
+
+    def fake_apply_nginx_site_config(**kwargs):
+        captured.append(kwargs)
+        return {"managed": True, **kwargs}
+
+    monkeypatch.setattr("larops.commands.create.apply_nginx_site_config", fake_apply_nginx_site_config)
+    monkeypatch.setattr(
+        "larops.commands.create.default_cert_file",
+        lambda _domain: cert_dir / "fullchain.pem",
+    )
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--force", "--apply"],
+    )
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0]["https_enabled"] is True
+
+
 def test_site_create_apply_short_flag(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     _ = make_source(tmp_path, "demo.test")
@@ -492,6 +561,16 @@ def test_create_site_runtime_requires_deploy(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "Runtime enable requires --deploy" in result.stdout
+
+
+def test_create_site_no_deploy_does_not_require_explicit_no_nginx(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--no-deploy"],
+    )
+    assert result.exit_code == 0
+    assert "Create site plan prepared for demo.test" in result.stdout
 
 
 def test_create_site_without_worker_ignores_worker_options(tmp_path: Path) -> None:

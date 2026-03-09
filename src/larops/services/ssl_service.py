@@ -24,6 +24,19 @@ def default_cert_file(domain: str) -> Path:
     return Path("/etc/letsencrypt/live") / domain / "fullchain.pem"
 
 
+def _run_ssl_command(command: list[str], *, missing_hint: str | None = None) -> str:
+    try:
+        completed = run_command(command, check=True)
+    except FileNotFoundError as exc:
+        tool = command[0] if command else "required command"
+        hint = missing_hint or (
+            f"{tool} is not installed. Install the web stack with `larops stack install --web --apply` "
+            "or install the required package manually."
+        )
+        raise SslServiceError(hint) from exc
+    return (completed.stdout or completed.stderr or "").strip()
+
+
 def build_issue_command(
     *,
     domain: str,
@@ -59,8 +72,13 @@ def build_issue_command(
 
 
 def run_issue(command: list[str]) -> str:
-    completed = run_command(command, check=True)
-    return (completed.stdout or "").strip()
+    return _run_ssl_command(
+        command,
+        missing_hint=(
+            "certbot is not installed. Install the web stack with `larops stack install --web --apply` "
+            "or install `certbot` manually, then retry SSL issuance."
+        ),
+    )
 
 
 def build_delete_command(*, domain: str) -> list[str]:
@@ -74,8 +92,13 @@ def build_delete_command(*, domain: str) -> list[str]:
 
 
 def run_delete(command: list[str]) -> str:
-    completed = run_command(command, check=True)
-    return (completed.stdout or completed.stderr or "").strip()
+    return _run_ssl_command(
+        command,
+        missing_hint=(
+            "certbot is not installed. Install the web stack with `larops stack install --web --apply` "
+            "or install `certbot` manually before deleting certificates."
+        ),
+    )
 
 
 def build_renew_command(*, force: bool, dry_run: bool) -> list[str]:
@@ -88,17 +111,25 @@ def build_renew_command(*, force: bool, dry_run: bool) -> list[str]:
 
 
 def run_renew(command: list[str]) -> str:
-    completed = run_command(command, check=True)
-    return (completed.stdout or "").strip()
+    return _run_ssl_command(
+        command,
+        missing_hint=(
+            "certbot is not installed. Install the web stack with `larops stack install --web --apply` "
+            "or install `certbot` manually before renewing certificates."
+        ),
+    )
 
 
 def read_certificate_info(cert_file: Path) -> CertificateInfo:
     if not cert_file.exists():
         raise SslServiceError(f"Certificate file not found: {cert_file}")
 
-    end = run_command(["openssl", "x509", "-in", str(cert_file), "-noout", "-enddate"], check=True)
-    subject = run_command(["openssl", "x509", "-in", str(cert_file), "-noout", "-subject"], check=True)
-    issuer = run_command(["openssl", "x509", "-in", str(cert_file), "-noout", "-issuer"], check=True)
+    try:
+        end = run_command(["openssl", "x509", "-in", str(cert_file), "-noout", "-enddate"], check=True)
+        subject = run_command(["openssl", "x509", "-in", str(cert_file), "-noout", "-subject"], check=True)
+        issuer = run_command(["openssl", "x509", "-in", str(cert_file), "-noout", "-issuer"], check=True)
+    except FileNotFoundError as exc:
+        raise SslServiceError("openssl is not installed. Install `openssl` and retry the certificate check.") from exc
 
     line = (end.stdout or "").strip()
     if not line.startswith("notAfter="):

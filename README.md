@@ -1,21 +1,28 @@
 # LarOps
 
-Laravel-first server operations CLI for provisioning, deployment, runtime control, backups, security hardening, and observability on Linux servers.
+Laravel-first server operations CLI for provisioning, deployment, runtime control, backups, security hardening, and observability on Linux hosts.
 
-## Language
+## Languages
 
-- English: [README.en.md](README.en.md)
+- English manual: [README.en.md](README.en.md)
 - Tiếng Việt: [README.vi.md](README.vi.md)
 
-## What LarOps Covers
+## Production Scope
 
-- Host bootstrap (`stack install`, `bootstrap init`)
-- Site and app lifecycle (`site create`, `app deploy`, `app rollback`)
-- Runtime control for `worker`, `scheduler`, and `horizon`
-- SSL issuance and renewal
-- Database backup, restore, offsite backup, and restore verification
-- Security baseline, SSH/Nginx hardening, and scan/FIM monitoring
-- Telegram notifications, fleet health checks, metrics export, and log shipping hooks
+Primary production targets:
+
+- Ubuntu 22.04 LTS
+- Ubuntu 24.04 LTS
+- Debian 12
+
+Preview / evaluation only:
+
+- Debian 13
+- Rocky Linux 9
+- AlmaLinux 9
+- RHEL 9
+
+Details: [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
 
 ## Quick Start
 
@@ -26,33 +33,48 @@ larops bootstrap init --apply
 larops create site example.com --apply
 ```
 
-## Recommended Reading Order
+Weak VPS:
 
-1. Start with [README.en.md](README.en.md) if your team operates primarily in English.
-2. Start with [README.vi.md](README.vi.md) if you want the same workflow explained in Vietnamese.
-3. Use [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md) for production-oriented checklists and command sequences.
-4. Use [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md) before targeting a new distro.
+```bash
+larops bootstrap init --profile small-vps --apply
+larops create site example.com --profile small-vps --apply
+```
 
-## Core Principles
+## Command Overview
 
-- `plan` first, `--apply` second
-- Prefer secret files over inline credentials
-- Validate deploys with health and verify phases
-- Treat backup as incomplete until `restore-verify` passes
-- Treat security posture as incomplete until hardening, timers, and notifier are all enabled
+| Group | Purpose | Example |
+| --- | --- | --- |
+| `stack` | Install host package groups | `larops stack install --web --ops --apply` |
+| `bootstrap` | Bootstrap a fresh host | `larops bootstrap init --apply` |
+| `create` | First-time site create shortcut | `larops create site example.com --apply` |
+| `site` | Site-oriented lifecycle operations | `larops site runtime enable example.com -w -s -a` |
+| `app` | Release-based deploy and rollback | `larops app deploy example.com --source /var/www/source/example.com --apply` |
+| `worker`, `scheduler`, `horizon` | Runtime process control | `larops worker enable example.com --queue default --apply` |
+| `ssl` | Certificate issue, renew, check | `larops ssl issue example.com --challenge http --apply` |
+| `db` | Credentials, backup, restore, offsite | `larops db backup example.com --database appdb --apply` |
+| `notify`, `alert` | Telegram daemon and alert setup | `larops notify telegram daemon enable --apply` |
+| `security`, `secure`, `monitor` | Baseline security, hardening, monitoring | `larops security posture` |
+| `doctor`, `observability` | Health, metrics, and log shipping | `larops doctor fleet --include-checks` |
 
-## Production Notes
+Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
 
-- LarOps is strongest today for serious single-node Laravel operations.
-- Official production OS targets are Ubuntu 22.04/24.04 and Debian 12.
-- Debian 13 and EL9-family hosts should currently be treated as preview/evaluation targets, not primary production targets.
-- Multi-node orchestration and HA are outside the current core scope.
-- Use pinned releases in production instead of unpinned installer flows.
+## Fresh-Host Behavior
 
-## Repository Docs
+- If the default pinned release asset has not been published yet, the installer falls back to the latest `main` snapshot for the bootstrap install.
+- Disabled integrations can keep secret-file paths in `/etc/larops/larops.yaml`; those files are only required once the matching feature is enabled.
+- `create site` supports three source modes:
+  - existing local source directory
+  - Git clone with `--git-url`
+  - automatic Laravel scaffold with `composer create-project` when the site resolves to a Laravel-family profile
+- When deploy is enabled, `create site` also provisions a managed Nginx site config by default on supported single-node hosts.
+- If a previous `create site` run created metadata but did not finish provisioning, rerun with `--force`.
 
+## Docs Map
+
+- Command index: [docs/COMMANDS.md](docs/COMMANDS.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- Production runbook: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
 - English manual: [README.en.md](README.en.md)
 - Vietnamese manual: [README.vi.md](README.vi.md)
-- Production runbook: [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md)
 - OS support matrix: [docs/OS_SUPPORT_MATRIX.md](docs/OS_SUPPORT_MATRIX.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)

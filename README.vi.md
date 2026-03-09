@@ -6,6 +6,8 @@ Ngôn ngữ tài liệu:
 
 - Landing page: [README.md](README.md)
 - English manual: [README.en.md](README.en.md)
+- Command index: [docs/COMMANDS.md](docs/COMMANDS.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ## Mục lục
 
@@ -164,6 +166,13 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+`create site` sẽ xử lý source như sau trên host mới:
+
+- Nếu `deploy.source_base_path/<domain>` đã tồn tại, LarOps deploy từ source local đó.
+- Nếu source còn thiếu và có `--git-url`, LarOps sẽ clone repo vào `deploy.source_base_path/<domain>` trước.
+- Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
+- Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
+
 Local development:
 
 ```bash
@@ -214,7 +223,7 @@ Phần này dùng để tránh hiểu nhầm. Một số lệnh của LarOps ngh
 Lệnh này làm gì:
 
 - Có thể cài các group package của host:
-  - `web` = `nginx`, PHP-FPM và các extension PHP lõi
+  - `web` = `nginx`, `certbot`, PHP-FPM và các extension PHP lõi
   - `data` = `mariadb-server`, `redis-server`
   - `postgres` = `postgresql`
   - `ops` = `fail2ban` và firewall backend của host (`ufw` trên Debian/Ubuntu, `firewalld` trên EL9)
@@ -230,13 +239,14 @@ Lệnh này không làm gì:
 - Không thay thế hoàn toàn cho `site create`
 - Không tự issue SSL certificate
 - Không tự bật runtime processes trừ khi bạn bật ở bước sau
-- Không tự tạo full flow vhost production hoàn chỉnh cho app Laravel
+- Không thay thế cho bài toán ingress/reverse proxy/CDN nhiều node ở mức rộng hơn
 
 Hiểu ngắn gọn:
 
 - `bootstrap init` = chuẩn bị host
 - `site create` = flow tạo site theo góc nhìn ứng dụng
 - Với VPS yếu, nên bắt đầu bằng `larops bootstrap init --profile small-vps --apply`
+- File config sinh ra có thể chứa sẵn secret-file path cho feature đang tắt; các file đó chỉ bắt buộc khi feature tương ứng được bật.
 
 ### `larops site create`
 
@@ -252,6 +262,12 @@ Lệnh này làm gì:
   - `worker=false`
   - `scheduler=true`
   - `horizon=false`
+- Trên host single-node được support, khi có deploy thì LarOps sẽ tự provision managed Nginx site config.
+- Resolve source theo thứ tự:
+  - dùng `--source` nếu có
+  - nếu không thì dùng `deploy.source_base_path/<domain>`
+  - nếu path này chưa có và có `--git-url`, clone vào đó
+  - nếu path này chưa có và site hiệu lực thuộc họ Laravel, bootstrap bằng `composer create-project`
 - Có thể issue Let’s Encrypt nếu dùng `-le`
 - Có hỗ trợ `--atomic` để rollback khi create flow fail
 
@@ -427,6 +443,7 @@ Nguyên tắc nên theo:
 
 - ưu tiên secret file hơn inline secret trong YAML
 - fail-fast nếu secret file thiếu hoặc rỗng
+- secret-file path có thể tồn tại sẵn trong config khi feature đang tắt; LarOps chỉ đọc khi feature tương ứng được bật hoặc bị override rõ ràng
 - pin version installer trong production
 
 ## Luồng vận hành chuẩn
@@ -449,6 +466,34 @@ larops bootstrap init --domain example.com --source /var/www/source/example.com 
 larops create site example.com --apply
 larops site create example.com --apply
 ```
+
+Resolve source mặc định:
+
+- Nếu có `--source`, LarOps dùng đúng path đó.
+- Nếu không có `--source`, LarOps tìm `deploy.source_base_path/<domain>`.
+- Nếu path này chưa tồn tại và có `--git-url`, LarOps clone repo vào đó rồi mới deploy.
+- Nếu path này chưa tồn tại và site hiệu lực thuộc họ Laravel, LarOps tự bootstrap source bằng `composer create-project laravel/laravel`.
+- Nếu path này chưa tồn tại cho một site không thuộc họ Laravel và không có `--git-url`, lệnh sẽ fail và yêu cầu bạn cung cấp `--source` hoặc `--git-url`.
+
+Deploy trực tiếp từ Git:
+
+```bash
+larops create site example.com --git-url https://github.com/acme/example-app.git --apply
+```
+
+Tạo skeleton Laravel mới trên VPS yếu:
+
+```bash
+larops create site example.com --profile small-vps --apply
+```
+
+Hành vi Nginx mặc định:
+
+- Khi có deploy, `create site` sẽ tự tạo managed Nginx site config theo mặc định.
+- Không có `-le`: vhost HTTP được tạo để site mở được ngay.
+- Nếu domain đã có certificate hợp lệ sẵn, LarOps sẽ bind HTTPS mà không cần issue lại cert mới.
+- Có `-le`: LarOps tạo vhost HTTP trước, issue cert, rồi rewrite sang HTTPS.
+- Dùng `--no-nginx` nếu bạn chủ động quản lý ingress bên ngoài LarOps.
 
 Theo preset Laravel + Redis:
 
@@ -816,14 +861,88 @@ larops app deploy <domain> --source <path> --apply
 
 Nguyên nhân:
 
-- file token/chat id thiếu hoặc rỗng
+- Telegram thực sự đã được bật, hoặc override rõ ràng khiến LarOps phải đọc file token/chat id, nhưng file đang thiếu hoặc rỗng
 
 Cách xử lý:
 
-- tạo file secret
-- ghi giá trị thật
-- `chmod 600`
-- chạy lại lệnh
+- Nếu Telegram vẫn đang tắt, cứ để tắt và không cần tạo các file secret này.
+- Nếu muốn bật Telegram, hãy:
+  - tạo file secret
+  - ghi giá trị thật
+  - `chmod 600`
+  - chạy lại lệnh
+
+### `create site` báo thiếu source path
+
+Nguyên nhân:
+
+- Bạn không truyền `--source`, thư mục `deploy.source_base_path/<domain>` chưa tồn tại, và LarOps không suy ra được cách tạo source.
+
+Cách xử lý:
+
+```bash
+larops create site <domain> --source /path/to/app --apply
+```
+
+hoặc:
+
+```bash
+larops create site <domain> --git-url https://github.com/org/repo.git --apply
+```
+
+hoặc với site/profile thuộc họ Laravel:
+
+```bash
+larops create site <domain> --profile small-vps --apply
+```
+
+### `create site` báo `Application already exists. Use --force to recreate metadata.`
+
+Nguyên nhân:
+
+- Lần `create site` trước đã tạo `state/apps/<domain>.json` nhưng provisioning chưa hoàn tất.
+
+Cách xử lý:
+
+```bash
+larops --json app info <domain>
+larops create site <domain> --force --apply
+```
+
+Chỉ dùng `--force` cho recovery hoặc recreate có chủ đích, không dùng tùy tiện trên app production đang khỏe.
+
+### `larops` không chạy được sau khi cài
+
+Nguyên nhân:
+
+- Host còn một bản cài cũ từ trước khi installer được sửa phần virtualenv relocation.
+
+Cách xử lý:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | sudo bash
+```
+
+hoặc rebuild lại `/opt/larops/.venv` rồi cập nhật `/usr/local/bin/larops`.
+
+### `ssl issue` báo thiếu `certbot`
+
+Nguyên nhân:
+
+- Host được bootstrap từ bản LarOps cũ trước khi `certbot` được đưa vào web stack mặc định, hoặc `certbot` đã bị gỡ thủ công.
+
+Cách xử lý:
+
+```bash
+larops stack install --web --apply
+larops ssl issue <domain> --challenge http --apply
+```
+
+Hoặc chạy lại bootstrap host:
+
+```bash
+larops bootstrap init --apply
+```
 
 ### SSL auto-renew timer tồn tại nhưng không active
 

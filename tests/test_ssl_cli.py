@@ -44,6 +44,24 @@ def test_ssl_issue_plan_mode(tmp_path: Path) -> None:
     assert "SSL issue plan prepared for example.test" in result.stdout
 
 
+def test_ssl_issue_apply_reports_missing_certbot_cleanly(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command and command[0] == "certbot":
+            raise FileNotFoundError("certbot")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.ssl_service.run_command", fake_run_command)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "ssl", "issue", "example.test", "--challenge", "http", "--apply"],
+    )
+    assert result.exit_code == 1
+    assert "certbot is not installed" in result.stdout
+
+
 def test_ssl_check_missing_cert_file(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     cert = tmp_path / "missing.pem"

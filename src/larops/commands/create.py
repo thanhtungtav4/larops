@@ -23,6 +23,12 @@ from larops.services.app_lifecycle import (
     save_metadata,
     switch_current_symlink,
 )
+from larops.services.nginx_site_service import (
+    NginxSiteServiceError,
+    apply_nginx_site_config,
+    capture_nginx_site_snapshot,
+    restore_nginx_site_snapshot,
+)
 from larops.services.release_service import (
     build_deploy_phase_commands,
     ReleaseServiceError,
@@ -39,6 +45,7 @@ from larops.services.ssl_service import (
     SslServiceError,
     build_delete_command,
     build_issue_command,
+    default_cert_file,
     run_delete,
     run_issue,
 )
@@ -677,6 +684,7 @@ def create_site(
     php: str | None = typer.Option(None, "--php", help="PHP runtime version override."),
     db: str | None = typer.Option(None, "--db", help="Database engine override."),
     ssl: bool | None = typer.Option(None, "--ssl/--no-ssl", help="Enable SSL metadata flag."),
+    nginx: bool | None = typer.Option(None, "--nginx/--no-nginx", help="Provision a managed Nginx site config."),
     letsencrypt: bool = typer.Option(
         False,
         "--letsencrypt",
@@ -726,6 +734,7 @@ def create_site(
     php_runtime = str(site_profile["php"])
     db_engine = str(site_profile["db"])
     ssl_enabled = bool(site_profile["ssl"])
+    nginx_enabled = deploy if nginx is None else nginx
 
     if not deploy and (runtime_plan["worker"] or runtime_plan["scheduler"] or runtime_plan["horizon"]):
         app_ctx.emit_output(
@@ -737,6 +746,12 @@ def create_site(
         app_ctx.emit_output(
             "error",
             "Let's Encrypt requires --deploy. Remove -le or use --deploy.",
+        )
+        raise typer.Exit(code=2)
+    if nginx_enabled and not deploy:
+        app_ctx.emit_output(
+            "error",
+            "Managed Nginx site provisioning requires --deploy. Remove --nginx or use --deploy.",
         )
         raise typer.Exit(code=2)
     if runtime_plan["worker"]:
@@ -792,6 +807,7 @@ def create_site(
         php=php_runtime,
         db=db_engine,
         ssl=ssl_enabled or letsencrypt,
+        nginx=nginx_enabled,
         letsencrypt=letsencrypt,
         letsencrypt_command=ssl_issue_command,
         atomic=atomic,
@@ -824,7 +840,12 @@ def create_site(
     runtime_results: dict[str, dict] = {}
     rollback_steps: list[dict[str, str]] = []
     snapshot = _capture_atomic_snapshot(paths=paths, state_path=Path(app_ctx.config.state_path)) if atomic else None
+    nginx_snapshot = capture_nginx_site_snapshot(domain) if atomic and deploy and nginx_enabled else None
     ssl_result: dict | None = None
+    nginx_result: dict | None = None
+    existing_cert_file = default_cert_file(domain)
+    existing_privkey_file = existing_cert_file.parent / "privkey.pem"
+    existing_certificate_available = existing_cert_file.exists() and existing_privkey_file.exists()
     try:
         with CommandLock(_lock_name(domain)):
             _prepare_source(plan=source_prepare)
@@ -918,6 +939,15 @@ def create_site(
                         "health_check": health_check,
                     },
                 )
+                if nginx_enabled:
+                    current_path = paths.current.resolve(strict=True)
+                    nginx_result = apply_nginx_site_config(
+                        domain=domain,
+                        current_path=current_path,
+                        php_version=php_runtime,
+                        https_enabled=existing_certificate_available,
+                        force=force,
+                    )
 
             if any(runtime_plan.values()):
                 runtime_results = _enable_runtime_for_site(
@@ -939,10 +969,19 @@ def create_site(
                     "staging": le_staging,
                     "output": output,
                 }
+                if nginx_enabled and deploy:
+                    current_path = paths.current.resolve(strict=True)
+                    nginx_result = apply_nginx_site_config(
+                        domain=domain,
+                        current_path=current_path,
+                        php_version=php_runtime,
+                        https_enabled=True,
+                        force=True,
+                    )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError, ReleaseServiceError) as exc:
+    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError, ReleaseServiceError, NginxSiteServiceError) as exc:
         if atomic:
             rollback_steps = _atomic_rollback_create_site(
                 app_ctx=app_ctx,
@@ -953,6 +992,9 @@ def create_site(
                 release_id=release_id,
                 letsencrypt=letsencrypt,
             )
+            if nginx_snapshot is not None:
+                restore_nginx_site_snapshot(nginx_snapshot)
+                rollback_steps.append({"step": "restore_nginx_site"})
         _emit(
             app_ctx,
             severity="error",
@@ -974,7 +1016,7 @@ def create_site(
         event_type="create.site.completed",
         domain=domain,
         message="Create site completed.",
-        metadata={"deploy": deploy, "runtime": runtime_plan},
+        metadata={"deploy": deploy, "runtime": runtime_plan, "nginx": nginx_enabled},
     )
     app_ctx.emit_output(
         "ok",
@@ -984,4 +1026,5 @@ def create_site(
         deleted_releases=deleted_releases,
         runtime_enabled=runtime_results,
         ssl_result=ssl_result,
+        nginx_result=nginx_result,
     )
