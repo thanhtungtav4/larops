@@ -207,6 +207,45 @@ def _resolve_bootstrap_app_commands(*, site_profile: dict[str, Any], current_pat
     return commands
 
 
+def _preserved_site_metadata(paths: Any) -> dict[str, Any]:
+    if not paths.metadata.exists():
+        return {}
+    try:
+        existing = load_metadata(paths.metadata)
+    except AppLifecycleError:
+        return {}
+    preserved: dict[str, Any] = {}
+    for key in ("database_provision", "env_sync"):
+        value = existing.get(key)
+        if isinstance(value, dict):
+            preserved[key] = value
+    return preserved
+
+
+def _sync_env_from_database_provision(*, paths: Any, database_provision: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    password_file_raw = str(database_provision.get("password_file", "")).strip()
+    if not password_file_raw:
+        return None
+    password_file = Path(password_file_raw)
+    if not password_file.exists():
+        return None
+    password = password_file.read_text(encoding="utf-8").strip()
+    if not password:
+        return None
+    env_sync = upsert_env_values(
+        env_file=paths.shared / ".env",
+        updates=database_env_updates(
+            engine=str(database_provision["engine"]),
+            host=str(database_provision["host"]),
+            port=int(database_provision["port"]),
+            database=str(database_provision["database"]),
+            user=str(database_provision["user"]),
+            password=password,
+        ),
+    )
+    return env_sync, password
+
+
 def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, bool]:
     if worker or scheduler or horizon:
         return {
@@ -1020,6 +1059,7 @@ def create_site(
     try:
         with CommandLock(_lock_name(domain)):
             _prepare_source(plan=source_prepare)
+            preserved_metadata = _preserved_site_metadata(paths) if force else {}
             metadata_payload = {
                 "domain": domain,
                 "php": php_runtime,
@@ -1028,6 +1068,7 @@ def create_site(
                 "profile": site_profile,
                 "created_at": datetime.now(UTC).isoformat(),
             }
+            metadata_payload.update(preserved_metadata)
             initialize_app(paths, metadata_payload, overwrite=force)
 
             if db_provision_plan is not None:
@@ -1068,6 +1109,14 @@ def create_site(
                             password=db_password_value or "",
                         ),
                     )
+                    metadata = load_metadata(paths.metadata)
+                    metadata["env_sync"] = env_sync_result
+                    save_metadata(paths.metadata, metadata)
+            elif isinstance(metadata_payload.get("database_provision"), dict):
+                db_result = dict(metadata_payload["database_provision"])
+                synced = _sync_env_from_database_provision(paths=paths, database_provision=db_result)
+                if synced is not None:
+                    env_sync_result, db_password_value = synced
                     metadata = load_metadata(paths.metadata)
                     metadata["env_sync"] = env_sync_result
                     save_metadata(paths.metadata, metadata)
