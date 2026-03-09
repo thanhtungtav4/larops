@@ -2,8 +2,10 @@ from pathlib import Path
 from subprocess import CompletedProcess
 
 from larops.config import DeployConfig
+from larops.services.app_lifecycle import get_app_paths, initialize_app
 from larops.services.release_service import (
     build_deploy_phase_commands,
+    prepare_release_candidate,
     build_rollback_phase_commands,
     resolve_build_commands_for_release,
     run_release_commands,
@@ -94,3 +96,33 @@ def test_resolve_build_commands_for_release_skips_when_vendor_exists(tmp_path: P
 
     commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
     assert commands == []
+
+
+def test_prepare_release_candidate_bootstraps_laravel_runtime_directories(tmp_path: Path) -> None:
+    state_path = tmp_path / "state"
+    paths = get_app_paths(tmp_path / "apps", state_path, "demo.test")
+    initialize_app(paths, {"domain": "demo.test"})
+
+    source = tmp_path / "source"
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+    (source / ".env").write_text("APP_ENV=production\n", encoding="utf-8")
+
+    release_id, release_dir = prepare_release_candidate(
+        paths=paths,
+        source_path=source,
+        ref="main",
+        shared_dirs=["storage", "bootstrap/cache"],
+        shared_files=[".env"],
+    )
+
+    assert release_id
+    assert (release_dir / "storage").is_symlink()
+    assert (release_dir / "bootstrap" / "cache").is_symlink()
+    assert (release_dir / "storage" / "framework" / "cache" / "data").is_dir()
+    assert (release_dir / "storage" / "framework" / "sessions").is_dir()
+    assert (release_dir / "storage" / "framework" / "views").is_dir()
+    assert (release_dir / "storage" / "logs").is_dir()
+    assert (release_dir / "storage" / "app" / "public").is_dir()
+    assert (paths.shared / "storage" / "framework" / "views").is_dir()
+    assert (paths.shared / "bootstrap" / "cache").is_dir()

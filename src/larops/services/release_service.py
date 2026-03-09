@@ -19,6 +19,14 @@ class ReleaseServiceError(RuntimeError):
 
 
 _RELEASE_MANIFEST = ".larops-deploy-manifest.json"
+_LARAVEL_RUNTIME_DIRS = (
+    "storage/app/public",
+    "storage/framework/cache/data",
+    "storage/framework/sessions",
+    "storage/framework/views",
+    "storage/logs",
+    "bootstrap/cache",
+)
 
 
 def _remove_path(path: Path) -> None:
@@ -56,6 +64,13 @@ def _ensure_shared_file(paths: AppPaths, release_dir: Path, relative_path: str) 
     release_target.symlink_to(shared_target)
 
 
+def _ensure_laravel_runtime_paths(release_dir: Path) -> None:
+    if not (release_dir / "artisan").exists():
+        return
+    for relative_path in _LARAVEL_RUNTIME_DIRS:
+        (release_dir / relative_path).mkdir(parents=True, exist_ok=True)
+
+
 def prepare_release_candidate(
     *,
     paths: AppPaths,
@@ -73,6 +88,7 @@ def prepare_release_candidate(
         cleaned = relative_path.strip()
         if cleaned:
             _ensure_shared_file(paths, release_dir, cleaned)
+    _ensure_laravel_runtime_paths(release_dir)
     return release_id, release_dir
 
 

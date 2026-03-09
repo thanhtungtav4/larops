@@ -265,12 +265,46 @@ Current LarOps behavior:
   - `migrate --force`
   - `optimize:clear`
   - `optimize`
+- auto-creates the standard shared Laravel runtime directories:
+  - `storage/framework/cache/data`
+  - `storage/framework/sessions`
+  - `storage/framework/views`
+  - `storage/logs`
+  - `storage/app/public`
+  - `bootstrap/cache`
 
 Manual artisan commands are still useful when:
 
 - you are repairing an older release created before this behavior existed
 - you intentionally disabled or bypassed the normal create flow
 - your app requires additional project-specific setup commands
+
+## Laravel bootstrap fails with `Please provide a valid cache path`
+
+Symptom:
+
+```text
+Please provide a valid cache path.
+```
+
+Meaning:
+
+- Laravel reached the bootstrap phase, but the writable runtime tree under `storage/` or `bootstrap/cache` was missing or broken for that release.
+- Current LarOps creates these runtime directories automatically during release preparation for sources that contain `artisan`.
+
+Fix:
+
+- Update LarOps on the host.
+- Re-run `create site --force --apply` or `app deploy --apply` so a fresh release gets prepared with the runtime tree.
+- Verify the shared runtime directories if you need to inspect manually:
+
+```bash
+ls -ld /var/www/<domain>/shared/storage/framework/views
+ls -ld /var/www/<domain>/shared/storage/framework/cache/data
+ls -ld /var/www/<domain>/shared/storage/framework/sessions
+ls -ld /var/www/<domain>/shared/storage/logs
+ls -ld /var/www/<domain>/shared/bootstrap/cache
+```
 
 ## `composer install` fails because the lock file requires a newer PHP version
 
