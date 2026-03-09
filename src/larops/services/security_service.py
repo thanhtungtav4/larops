@@ -34,6 +34,11 @@ SUSPICIOUS_PATH_PATTERNS = (
 )
 
 SUSPICIOUS_HTTP_STATUSES = {"403", "404", "444"}
+_FAIL2BAN_ACTION_DIRS = (
+    Path("/etc/fail2ban/action.d"),
+    Path("/usr/share/fail2ban/action.d"),
+    Path("/usr/lib/fail2ban/action.d"),
+)
 
 
 class SecurityReportError(RuntimeError):
@@ -80,6 +85,19 @@ def _parse_sshd_port_from_jail(fail2ban_jail_path: Path) -> int:
     return 22
 
 
+def _parse_fail2ban_banaction_from_jail(fail2ban_jail_path: Path) -> str | None:
+    if not fail2ban_jail_path.exists() or not fail2ban_jail_path.is_file():
+        return None
+    try:
+        body = fail2ban_jail_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    matched = re.search(r"^\s*banaction\s*=\s*([^\s#]+)\s*$", body, flags=re.MULTILINE)
+    if not matched:
+        return None
+    return matched.group(1).strip()
+
+
 def _parse_firewalld_active_zones(output: str) -> list[str]:
     zones: list[str] = []
     for raw_line in output.splitlines():
@@ -98,22 +116,62 @@ def _parse_firewalld_tokens(output: str) -> set[str]:
     return {token.strip() for token in output.split() if token.strip()}
 
 
+def _parse_firewalld_rich_rule_sources(output: str) -> set[str]:
+    return {
+        matched.group(1)
+        for matched in re.finditer(r'source\s+address="([^"]+)"', output)
+        if matched.group(1).strip()
+    }
+
+
+def _parse_fail2ban_banned_ips(output: str) -> list[str]:
+    banned_ips: list[str] = []
+    for line in output.splitlines():
+        if "Banned IP list:" not in line:
+            continue
+        _, _, raw_ips = line.partition("Banned IP list:")
+        for ip in raw_ips.strip().split():
+            cleaned = ip.strip()
+            if cleaned:
+                banned_ips.append(cleaned)
+    return list(dict.fromkeys(banned_ips))
+
+
+def _detect_fail2ban_action_file(action_name: str | None) -> dict[str, Any]:
+    if not action_name:
+        return {"action": None, "checked": False, "exists": False, "path": None}
+
+    existing_dirs = [path for path in _FAIL2BAN_ACTION_DIRS if path.exists() and path.is_dir()]
+    if not existing_dirs:
+        return {"action": action_name, "checked": False, "exists": False, "path": None}
+
+    for directory in existing_dirs:
+        candidate = directory / f"{action_name}.conf"
+        if candidate.exists() and candidate.is_file():
+            return {"action": action_name, "checked": True, "exists": True, "path": str(candidate)}
+
+    return {"action": action_name, "checked": True, "exists": False, "path": None}
+
+
 def _collect_firewalld_zone_report(zone: str, *, ssh_port: int) -> dict[str, Any]:
     services_result = run_command(["firewall-cmd", "--zone", zone, "--list-services"], check=False)
     ports_result = run_command(["firewall-cmd", "--zone", zone, "--list-ports"], check=False)
+    rich_rules_result = run_command(["firewall-cmd", "--zone", zone, "--list-rich-rules"], check=False)
     services = _parse_firewalld_tokens((services_result.stdout or services_result.stderr or "").strip())
     ports = _parse_firewalld_tokens((ports_result.stdout or ports_result.stderr or "").strip())
+    rich_rule_sources = _parse_firewalld_rich_rule_sources((rich_rules_result.stdout or rich_rules_result.stderr or "").strip())
     required_services = {"http", "https"}
     required_ports = {f"{ssh_port}/tcp"}
     return {
         "zone": zone,
         "services": sorted(services),
         "ports": sorted(ports),
+        "rich_rule_sources": sorted(rich_rule_sources),
         "required_services": sorted(required_services),
         "required_ports": sorted(required_ports),
         "missing_services": sorted(required_services - services),
         "missing_ports": sorted(required_ports - ports),
-        "exit_code": max(services_result.returncode, ports_result.returncode),
+        "exit_code": max(services_result.returncode, ports_result.returncode, rich_rules_result.returncode),
         "rules_ok": services_result.returncode == 0
         and ports_result.returncode == 0
         and required_services.issubset(services)
@@ -307,6 +365,8 @@ def collect_security_status(
         }
     elif platform.family == "el9":
         ssh_port = _parse_sshd_port_from_jail(fail2ban_jail_path)
+        expected_banaction = _parse_fail2ban_banaction_from_jail(fail2ban_jail_path) or "firewallcmd-rich-rules"
+        action_file = _detect_fail2ban_action_file(expected_banaction)
         firewalld_active = run_command(["systemctl", "is-active", "firewalld"], check=False)
         firewalld_enabled = run_command(["systemctl", "is-enabled", "firewalld"], check=False)
         firewalld_state = run_command(["firewall-cmd", "--state"], check=False)
@@ -322,6 +382,8 @@ def collect_security_status(
             "enabled": (firewalld_enabled.stdout or firewalld_enabled.stderr or "").strip(),
             "state": (firewalld_state.stdout or firewalld_state.stderr or "").strip(),
             "ssh_port": ssh_port,
+            "expected_banaction": expected_banaction,
+            "action_file": action_file,
             "default_zone": default_zone,
             "active_zones": active_zones,
             "effective_zones": effective_zones,
@@ -345,7 +407,7 @@ def collect_security_status(
     def _output(raw) -> str:
         return (raw.stdout or raw.stderr or "").strip()
 
-    return {
+    report = {
         "firewall": firewall_report,
         "fail2ban": {"raw": _output(fail2ban_status), "exit_code": fail2ban_status.returncode},
         "jails": {
@@ -360,6 +422,23 @@ def collect_security_status(
             "filter": {"path": str(fail2ban_filter_path), "exists": fail2ban_filter_path.exists()},
         },
     }
+    if platform.family == "el9":
+        banned_ips = sorted(
+            {
+                *(_parse_fail2ban_banned_ips(report["jails"]["sshd"]["raw"])),
+                *(_parse_fail2ban_banned_ips(report["jails"]["larops-nginx-scan"]["raw"])),
+            }
+        )
+        rich_rule_sources = {
+            source
+            for zone_report in firewall_report.get("zones", [])
+            if isinstance(zone_report, dict)
+            for source in zone_report.get("rich_rule_sources", [])
+        }
+        missing_banned_ips = [ip for ip in banned_ips if ip not in rich_rule_sources]
+        firewall_report["banned_ips"] = banned_ips
+        firewall_report["missing_banned_ips"] = missing_banned_ips
+    return report
 
 
 def determine_security_status_level(report: dict[str, Any]) -> str:
@@ -378,11 +457,17 @@ def determine_security_status_level(report: dict[str, Any]) -> str:
             return "error"
         if str(firewall.get("state", "")).strip().lower() != "running":
             return "error"
+        action_file = firewall.get("action_file", {})
+        if isinstance(action_file, dict) and bool(action_file.get("checked")) and not bool(action_file.get("exists")):
+            return "error"
         effective_zones = firewall.get("effective_zones", [])
         if not isinstance(effective_zones, list) or not effective_zones:
             return "error"
         zone_reports = firewall.get("zones", [])
         if not isinstance(zone_reports, list) or any(not bool(item.get("rules_ok")) for item in zone_reports):
+            return "error"
+        missing_banned_ips = firewall.get("missing_banned_ips", [])
+        if isinstance(missing_banned_ips, list) and missing_banned_ips:
             return "error"
     else:
         return "error"
