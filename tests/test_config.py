@@ -111,6 +111,38 @@ def test_load_config_reads_backup_offsite_and_encryption(tmp_path: Path) -> None
     assert config.backups.offsite.stale_hours == 12
 
 
+def test_load_config_skips_disabled_secret_files_from_config_defaults(tmp_path: Path) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text(
+        "\n".join(
+            [
+                "notifications:",
+                "  telegram:",
+                "    enabled: false",
+                "    bot_token_file: /etc/larops/secrets/telegram_bot_token",
+                "    chat_id_file: /etc/larops/secrets/telegram_chat_id",
+                "backups:",
+                "  encryption:",
+                "    enabled: false",
+                "    passphrase_file: /etc/larops/secrets/backup_passphrase",
+                "  offsite:",
+                "    enabled: false",
+                "    access_key_id_file: /etc/larops/secrets/offsite_access_key_id",
+                "    secret_access_key_file: /etc/larops/secrets/offsite_secret_access_key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(file)
+    assert config.notifications.telegram.enabled is False
+    assert config.notifications.telegram.bot_token == ""
+    assert config.notifications.telegram.chat_id == ""
+    assert config.backups.encryption.passphrase == ""
+    assert config.backups.offsite.access_key_id == ""
+    assert config.backups.offsite.secret_access_key == ""
+
+
 def test_load_config_env_overrides_telegram_from_secret_files(tmp_path: Path, monkeypatch) -> None:
     file = tmp_path / "larops.yaml"
     file.write_text(
@@ -153,6 +185,7 @@ def test_load_config_fail_fast_when_secret_file_missing(tmp_path: Path, monkeypa
     file = tmp_path / "larops.yaml"
     file.write_text("environment: test\n", encoding="utf-8")
     monkeypatch.setenv("LAROPS_TELEGRAM_BOT_TOKEN_FILE", str(tmp_path / "missing-token"))
+    monkeypatch.setenv("LAROPS_TELEGRAM_ENABLED", "true")
 
     with pytest.raises(ConfigError):
         load_config(file)
@@ -164,6 +197,7 @@ def test_load_config_fail_fast_when_secret_file_empty(tmp_path: Path, monkeypatc
     token_file = tmp_path / "token.txt"
     token_file.write_text("", encoding="utf-8")
     monkeypatch.setenv("LAROPS_TELEGRAM_BOT_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("LAROPS_TELEGRAM_ENABLED", "true")
 
     with pytest.raises(ConfigError):
         load_config(file)

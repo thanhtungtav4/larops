@@ -247,27 +247,43 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
     if offsite_secret_access_key_file:
         updated.backups.offsite.secret_access_key_file = offsite_secret_access_key_file
 
-    if updated.notifications.telegram.bot_token_file:
+    telegram_secret_active = updated.notifications.telegram.enabled or any(
+        [telegram_bot_token, telegram_bot_token_file, telegram_chat_id, telegram_chat_id_file]
+    )
+    backup_encryption_secret_active = updated.backups.encryption.enabled or any([backup_passphrase, backup_passphrase_file])
+    offsite_secret_active = updated.backups.offsite.enabled or any(
+        [offsite_access_key_id, offsite_access_key_id_file, offsite_secret_access_key, offsite_secret_access_key_file]
+    )
+
+    if telegram_secret_active and updated.notifications.telegram.bot_token_file and not updated.notifications.telegram.bot_token:
         updated.notifications.telegram.bot_token = _read_secret(
             updated.notifications.telegram.bot_token_file,
             "Telegram bot token",
         )
-    if updated.notifications.telegram.chat_id_file:
+    if telegram_secret_active and updated.notifications.telegram.chat_id_file and not updated.notifications.telegram.chat_id:
         updated.notifications.telegram.chat_id = _read_secret(
             updated.notifications.telegram.chat_id_file,
             "Telegram chat id",
         )
-    if updated.backups.encryption.passphrase_file:
+    if (
+        backup_encryption_secret_active
+        and updated.backups.encryption.passphrase_file
+        and not updated.backups.encryption.passphrase
+    ):
         updated.backups.encryption.passphrase = _read_secret(
             updated.backups.encryption.passphrase_file,
             "Backup encryption passphrase",
         )
-    if updated.backups.offsite.access_key_id_file:
+    if offsite_secret_active and updated.backups.offsite.access_key_id_file and not updated.backups.offsite.access_key_id:
         updated.backups.offsite.access_key_id = _read_secret(
             updated.backups.offsite.access_key_id_file,
             "Offsite access key id",
         )
-    if updated.backups.offsite.secret_access_key_file:
+    if (
+        offsite_secret_active
+        and updated.backups.offsite.secret_access_key_file
+        and not updated.backups.offsite.secret_access_key
+    ):
         updated.backups.offsite.secret_access_key = _read_secret(
             updated.backups.offsite.secret_access_key_file,
             "Offsite secret access key",
