@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import shutil
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ import yaml
 
 from larops.config import AppConfig
 from larops.core.locks import CommandLock, CommandLockError
-from larops.core.shell import ShellCommandError
+from larops.core.shell import ShellCommandError, run_command
 from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_lifecycle import (
@@ -30,6 +31,7 @@ from larops.services.release_service import (
     run_release_commands,
     write_release_manifest,
 )
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 from larops.services.stack_service import StackServiceError, apply_stack_plan, build_stack_plan, resolve_groups
 
 bootstrap_app = typer.Typer(help="Bootstrap empty servers like WordOps-style one-shot setup.")
@@ -220,6 +222,15 @@ def _default_config_yaml(app_ctx: AppContext, *, profile_name: str) -> str:
     return yaml.safe_dump(payload, sort_keys=False)
 
 
+def _relabel_managed_etc_paths(paths: list[Path]) -> None:
+    relabel_managed_paths_for_selinux(
+        paths,
+        run_command=run_command,
+        which=shutil.which,
+        roots=[Path("/etc")],
+    )
+
+
 @bootstrap_app.command("init")
 def init(
     ctx: typer.Context,
@@ -313,6 +324,7 @@ def init(
             if write_config and not config_path.exists():
                 config_path.parent.mkdir(parents=True, exist_ok=True)
                 config_path.write_text(_default_config_yaml(app_ctx, profile_name=str(resolved_profile["name"])), encoding="utf-8")
+                _relabel_managed_etc_paths([config_path])
                 app_ctx.emit_output("ok", f"Created config file: {config_path}")
 
             if stack_plan:
@@ -424,7 +436,7 @@ def init(
                     release_id=release_id,
                     deleted_releases=deleted_releases,
                 )
-    except (CommandLockError, AppLifecycleError, ShellCommandError, ReleaseServiceError) as exc:
+    except (CommandLockError, AppLifecycleError, ShellCommandError, ReleaseServiceError, SelinuxServiceError) as exc:
         app_ctx.event_emitter.emit(
             EventRecord(
                 severity="error",

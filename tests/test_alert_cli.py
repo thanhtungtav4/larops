@@ -131,3 +131,37 @@ def test_alert_set_disabled_does_not_require_secret_files(tmp_path: Path) -> Non
     assert telegram["enabled"] is False
     assert telegram["bot_token_file"] == str(token_file)
     assert telegram["chat_id_file"] == str(chat_id_file)
+
+
+def test_alert_set_apply_invokes_selinux_relabel_helper(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    token_file = tmp_path / "secrets" / "telegram_bot_token"
+    chat_id_file = tmp_path / "secrets" / "telegram_chat_id"
+    relabel_calls: list[list[str]] = []
+
+    def fake_relabel(paths, **kwargs) -> dict[str, object]:
+        relabel_calls.append([str(path) for path in paths])
+        return {"mode": "disabled", "relabelled_paths": []}
+
+    monkeypatch.setattr("larops.services.alert_service.relabel_managed_paths_for_selinux", fake_relabel)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "alert",
+            "set",
+            "--telegram-token",
+            "123:token",
+            "--telegram-chat-id",
+            "-100123",
+            "--telegram-token-file",
+            str(token_file),
+            "--telegram-chat-id-file",
+            str(chat_id_file),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert relabel_calls == [[str(token_file), str(chat_id_file), str(config)]]

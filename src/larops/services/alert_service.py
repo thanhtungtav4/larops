@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from larops.core.shell import run_command
+from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 
 
 class AlertServiceError(RuntimeError):
@@ -15,6 +19,18 @@ def _write_secret(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value.strip(), encoding="utf-8")
     os.chmod(path, 0o600)
+
+
+def _relabel_managed_etc_paths(paths: list[Path]) -> None:
+    try:
+        relabel_managed_paths_for_selinux(
+            paths,
+            run_command=run_command,
+            which=shutil.which,
+            roots=[Path("/etc")],
+        )
+    except SelinuxServiceError as exc:
+        raise AlertServiceError(str(exc)) from exc
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -73,6 +89,7 @@ def configure_telegram_alert(
         payload["events"] = {"sink": "jsonl", "path": "/var/log/larops/events.jsonl"}
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    _relabel_managed_etc_paths([telegram_token_file, telegram_chat_id_file, config_path])
 
     return {
         "config_path": str(config_path),

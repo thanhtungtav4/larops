@@ -237,3 +237,33 @@ def test_bootstrap_small_vps_profile_preserves_custom_runtime_policy_and_batch_s
     assert "cooldown_seconds: 222" in rendered
     assert "scheduler:" in rendered
     assert "horizon:" in rendered
+
+
+def test_bootstrap_write_config_invokes_selinux_relabel_helper(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    generated_config = tmp_path / "generated.yaml"
+    relabel_calls: list[list[str]] = []
+
+    def fake_relabel(paths, **kwargs) -> dict[str, object]:
+        relabel_calls.append([str(path) for path in paths])
+        return {"mode": "disabled", "relabelled_paths": []}
+
+    monkeypatch.setattr("larops.commands.bootstrap.relabel_managed_paths_for_selinux", fake_relabel)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "bootstrap",
+            "init",
+            "--skip-stack",
+            "--write-config",
+            "--config-path",
+            str(generated_config),
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert generated_config.exists()
+    assert relabel_calls == [[str(generated_config)]]
