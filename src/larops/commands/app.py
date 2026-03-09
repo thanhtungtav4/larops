@@ -23,6 +23,7 @@ from larops.services.app_lifecycle import (
     rollback_release,
     save_metadata,
 )
+from larops.services.nginx_site_service import resolve_nginx_site_paths
 from larops.services.release_service import (
     ReleaseServiceError,
     build_deploy_phase_commands,
@@ -34,6 +35,7 @@ from larops.services.release_service import (
     run_release_commands,
     write_release_manifest,
 )
+from larops.services.ssl_service import default_cert_file
 
 app_cmd = typer.Typer(help="Manage Laravel application lifecycle.")
 
@@ -61,6 +63,120 @@ def _emit_event(
             metadata=metadata or {},
         )
     )
+
+
+def _build_app_info_report(*, domain: str, paths: Path, releases: list[str], current: str | None, metadata: dict) -> dict:
+    app_paths = paths
+    nginx_paths = resolve_nginx_site_paths(domain)
+    cert_file = default_cert_file(domain)
+    profile = metadata.get("profile") if isinstance(metadata.get("profile"), dict) else None
+    last_deploy = metadata.get("last_deploy") if isinstance(metadata.get("last_deploy"), dict) else None
+    database_provision = metadata.get("database_provision") if isinstance(metadata.get("database_provision"), dict) else None
+
+    return {
+        "domain": domain,
+        "paths": {
+            "root": str(app_paths.root),
+            "releases": str(app_paths.releases),
+            "shared": str(app_paths.shared),
+            "current": str(app_paths.current),
+            "metadata": str(app_paths.metadata),
+        },
+        "releases": {
+            "count": len(releases),
+            "current": current,
+            "all": releases,
+        },
+        "app": {
+            "php": metadata.get("php"),
+            "db": metadata.get("db"),
+            "ssl": metadata.get("ssl"),
+            "created_at": metadata.get("created_at"),
+        },
+        "profile": profile,
+        "deploy": {
+            "source": last_deploy.get("source") if last_deploy else None,
+            "ref": last_deploy.get("ref") if last_deploy else None,
+            "deployed_at": last_deploy.get("deployed_at") if last_deploy else None,
+            "health_check": last_deploy.get("health_check") if last_deploy else None,
+        },
+        "database_provision": database_provision,
+        "web": {
+            "nginx_server_config_file": str(nginx_paths.server_config_file),
+            "nginx_enabled_site_file": str(nginx_paths.enabled_site_file),
+            "nginx_activation_mode": nginx_paths.activation_mode,
+            "certificate_file": str(cert_file),
+            "certificate_present": cert_file.exists(),
+        },
+    }
+
+
+def _emit_app_info_summary(app_ctx: AppContext, *, report: dict) -> None:
+    if app_ctx.json_output:
+        return
+
+    paths = report["paths"]
+    releases = report["releases"]
+    app = report["app"]
+    deploy = report["deploy"]
+    web = report["web"]
+    profile = report.get("profile")
+    db_provision = report.get("database_provision")
+
+    lines = [
+        f"  app root: {paths['root']}",
+        f"  shared path: {paths['shared']}",
+        f"  current path: {paths['current']}",
+        f"  metadata: {paths['metadata']}",
+        f"  releases: {releases['count']}",
+        f"  current release: {releases['current'] or 'none'}",
+        f"  php: {app.get('php') or 'unknown'}",
+        f"  db engine: {app.get('db') or 'unknown'}",
+        f"  ssl enabled: {bool(app.get('ssl'))}",
+    ]
+    if profile:
+        lines.extend(
+            [
+                f"  profile preset: {profile.get('preset') or 'custom'}",
+                f"  profile type: {profile.get('type') or 'custom'}",
+                f"  profile cache: {profile.get('cache') or 'none'}",
+            ]
+        )
+        runtime = profile.get("runtime") if isinstance(profile.get("runtime"), dict) else {}
+        if runtime:
+            enabled = ", ".join(sorted(name for name, enabled in runtime.items() if enabled))
+            lines.append(f"  runtime profile: {enabled or 'none'}")
+    if deploy.get("source"):
+        lines.extend(
+            [
+                f"  deploy source: {deploy['source']}",
+                f"  deploy ref: {deploy.get('ref') or 'unknown'}",
+                f"  deployed at: {deploy.get('deployed_at') or 'unknown'}",
+            ]
+        )
+        health_check = deploy.get("health_check")
+        if isinstance(health_check, dict) and health_check:
+            lines.append(f"  health check: {health_check.get('status', 'unknown')}")
+    lines.extend(
+        [
+            f"  nginx config: {web['nginx_server_config_file']}",
+            f"  nginx activation: {web['nginx_activation_mode']}",
+            f"  cert file: {web['certificate_file']}",
+            f"  cert present: {web['certificate_present']}",
+        ]
+    )
+    if db_provision:
+        lines.extend(
+            [
+                f"  db name: {db_provision.get('database', 'unknown')}",
+                f"  db user: {db_provision.get('user', 'unknown')}",
+                f"  db host: {db_provision.get('host', 'unknown')}:{db_provision.get('port', 'unknown')}",
+                f"  db credential file: {db_provision.get('credential_file', 'unknown')}",
+                f"  db password file: {db_provision.get('password_file', 'unknown')}",
+            ]
+        )
+    for line in lines:
+        app_ctx.emit_output("ok", line)
 
 
 @app_cmd.command("create")
@@ -531,6 +647,7 @@ def info(
 
     releases = list_releases(paths)
     current = get_current_release(paths)
+    report = _build_app_info_report(domain=domain, paths=paths, releases=releases, current=current, metadata=metadata)
 
     app_ctx.emit_output(
         "ok",
@@ -541,4 +658,6 @@ def info(
         releases_count=len(releases),
         current_release=current,
         metadata=metadata,
+        report=report,
     )
+    _emit_app_info_summary(app_ctx, report=report)

@@ -4,13 +4,20 @@ import os
 import re
 import shlex
 import stat
+from subprocess import CompletedProcess
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from larops.cli import app
 from larops.services.db_offsite_service import DbOffsiteError
-from larops.services.db_service import DbServiceError, build_backup_command, build_restore_command
+from larops.services.db_service import (
+    DbServiceError,
+    _mysql_local_scalar_query,
+    _mysql_scalar_query,
+    build_backup_command,
+    build_restore_command,
+)
 
 runner = CliRunner()
 
@@ -335,6 +342,33 @@ def test_db_provision_apply_fails_clearly_when_mysql_binary_missing(tmp_path: Pa
     )
     assert result.exit_code == 1
     assert "MySQL client binary not found (`mysql`)" in result.stdout
+
+
+def test_mysql_local_scalar_query_uses_no_header_flags(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_command(command: list[str], check: bool = True):
+        captured["command"] = command
+        return CompletedProcess(command, 0, stdout="0\n", stderr="")
+
+    monkeypatch.setattr("larops.services.db_service.run_command", fake_run_command)
+    assert _mysql_local_scalar_query(sql="SELECT COUNT(*) FROM test;") == 0
+    assert "mysql -N -B -e" in str(captured["command"][2])
+
+
+def test_mysql_scalar_query_uses_no_header_flags(tmp_path: Path, monkeypatch) -> None:
+    secret = tmp_path / "db.cnf"
+    write_secret(secret)
+    captured: dict[str, object] = {}
+
+    def fake_run_command(command: list[str], check: bool = True):
+        captured["command"] = command
+        return CompletedProcess(command, 0, stdout="1\n", stderr="")
+
+    monkeypatch.setattr("larops.services.db_service.run_command", fake_run_command)
+    assert _mysql_scalar_query(credential_file=secret, sql="SELECT COUNT(*) FROM test;") == 1
+    assert "--defaults-extra-file=" in str(captured["command"][2])
+    assert " -N -B -e " in str(captured["command"][2])
 
 
 def test_build_backup_command_sets_restrictive_umask(tmp_path: Path) -> None:

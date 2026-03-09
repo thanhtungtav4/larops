@@ -459,16 +459,18 @@ def _temporary_verify_database_name(database: str) -> str:
     return candidate[:63]
 
 
-def _mysql_admin_command(*, credential_file: Path, sql: str) -> list[str]:
+def _mysql_admin_command(*, credential_file: Path, sql: str, scalar: bool = False) -> list[str]:
     ensure_secure_credential_file(credential_file)
     credential_file_q = shlex.quote(str(credential_file))
     sql_q = shlex.quote(sql)
-    return ["bash", "-lc", f"set -euo pipefail; mysql --defaults-extra-file={credential_file_q} -e {sql_q}"]
+    flags = "-N -B " if scalar else ""
+    return ["bash", "-lc", f"set -euo pipefail; mysql --defaults-extra-file={credential_file_q} {flags}-e {sql_q}"]
 
 
-def _mysql_local_root_command(*, sql: str) -> list[str]:
+def _mysql_local_root_command(*, sql: str, scalar: bool = False) -> list[str]:
     sql_q = shlex.quote(sql)
-    return ["bash", "-lc", f"set -euo pipefail; mysql -e {sql_q}"]
+    flags = "-N -B " if scalar else ""
+    return ["bash", "-lc", f"set -euo pipefail; mysql {flags}-e {sql_q}"]
 
 
 def _postgres_admin_command(*, credential_file: Path, database: str, sql: str) -> list[str]:
@@ -526,14 +528,14 @@ def _postgres_local_scalar_query(*, sql: str) -> int:
 
 
 def _mysql_scalar_query(*, credential_file: Path, sql: str) -> int:
-    command = _mysql_admin_command(credential_file=credential_file, sql=sql)
+    command = _mysql_admin_command(credential_file=credential_file, sql=sql, scalar=True)
     completed = run_command(command, check=True)
     raw = (completed.stdout or "").strip()
     return int(raw) if raw else 0
 
 
 def _mysql_local_scalar_query(*, sql: str) -> int:
-    command = _mysql_local_root_command(sql=sql)
+    command = _mysql_local_root_command(sql=sql, scalar=True)
     completed = run_command(command, check=True)
     raw = (completed.stdout or "").strip()
     return int(raw) if raw else 0

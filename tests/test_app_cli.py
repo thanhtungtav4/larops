@@ -98,6 +98,46 @@ def test_app_deploy_and_rollback_cycle(tmp_path: Path) -> None:
     assert info_after_payload["current_release"] != current_release
 
 
+def test_app_info_non_json_prints_operator_summary(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "src-one", "release-one")
+
+    create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+    deploy = runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source), "--apply"],
+    )
+    assert deploy.exit_code == 0
+
+    metadata_path = tmp_path / "state" / "apps" / "demo.test.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload["profile"] = {
+        "preset": "small-vps",
+        "type": "laravel",
+        "cache": "fastcgi",
+        "runtime": {"worker": False, "scheduler": True, "horizon": False},
+    }
+    payload["database_provision"] = {
+        "database": "demo_test",
+        "user": "demo_test",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "credential_file": "/tmp/demo.cnf",
+        "password_file": "/tmp/demo.txt",
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    monkeypatch.setattr("larops.commands.app.default_cert_file", lambda _domain: tmp_path / "fullchain.pem")
+
+    info = runner.invoke(app, ["--config", str(config), "app", "info", "demo.test"])
+    assert info.exit_code == 0
+    assert "Application info: demo.test" in info.stdout
+    assert "current release:" in info.stdout
+    assert "profile preset: small-vps" in info.stdout
+    assert "db name: demo_test" in info.stdout
+    assert "cert present: False" in info.stdout
+
+
 def test_deploy_prunes_old_releases(tmp_path: Path) -> None:
     config = write_config(tmp_path, keep_releases=2)
     create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
