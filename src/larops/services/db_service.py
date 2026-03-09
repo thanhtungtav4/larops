@@ -4,8 +4,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shlex
 import stat
+import string
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +19,7 @@ class DbServiceError(RuntimeError):
 
 
 _DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_DB_USER_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _SUPPORTED_ENGINES = ("mysql", "postgres")
 
 
@@ -44,6 +47,11 @@ def default_credential_file(state_path: Path, domain: str, *, engine: str = "mys
     normalized = normalize_db_engine(engine)
     extension = "cnf" if normalized == "mysql" else "pgpass"
     return state_path / "secrets" / "db" / f"{domain}.{extension}"
+
+
+def default_password_file(state_path: Path, domain: str, *, engine: str = "mysql") -> Path:
+    normalize_db_engine(engine)
+    return state_path / "secrets" / "db" / f"{domain}.txt"
 
 
 def list_backups(backup_dir: Path) -> list[str]:
@@ -177,6 +185,39 @@ def _validate_database_name(database: str) -> str:
     if not _DB_NAME_RE.fullmatch(database):
         raise DbServiceError("Invalid database name. Allowed pattern: [A-Za-z0-9_]+")
     return database
+
+
+def normalize_database_name(name: str) -> str:
+    candidate = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().lower()).strip("_")
+    if not candidate:
+        raise DbServiceError("Unable to derive a database name from the provided value.")
+    return _validate_database_name(candidate[:64])
+
+
+def normalize_database_user(name: str, *, engine: str = "mysql") -> str:
+    normalized_engine = normalize_db_engine(engine)
+    candidate = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().lower()).strip("_")
+    if not candidate:
+        raise DbServiceError("Unable to derive a database user from the provided value.")
+    limit = 32 if normalized_engine == "mysql" else 63
+    user = candidate[:limit]
+    if not _DB_USER_RE.fullmatch(user):
+        raise DbServiceError("Invalid database user. Allowed pattern: [A-Za-z0-9_]+")
+    return user
+
+
+def generate_database_password(length: int = 32) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(max(16, length)))
+
+
+def write_password_secret(*, password_file: Path, password: str) -> None:
+    if not password:
+        raise DbServiceError("Database password is empty.")
+    password_file.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(password_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(f"{password}\n")
 
 
 def _split_pgpass_line(line: str) -> list[str]:
@@ -424,6 +465,11 @@ def _mysql_admin_command(*, credential_file: Path, sql: str) -> list[str]:
     return ["bash", "-lc", f"set -euo pipefail; mysql --defaults-extra-file={credential_file_q} -e {sql_q}"]
 
 
+def _mysql_local_root_command(*, sql: str) -> list[str]:
+    sql_q = shlex.quote(sql)
+    return ["bash", "-lc", f"set -euo pipefail; mysql -e {sql_q}"]
+
+
 def _postgres_admin_command(*, credential_file: Path, database: str, sql: str) -> list[str]:
     ensure_secure_credential_file(credential_file)
     host, port, user = _read_postgres_connection_info(credential_file=credential_file, database=database)
@@ -441,6 +487,12 @@ def _postgres_admin_command(*, credential_file: Path, database: str, sql: str) -
             f"--username={user_q} --dbname=postgres -c {sql_q}"
         ),
     ]
+
+
+def _postgres_local_superuser_command(*, sql: str, scalar: bool = False) -> list[str]:
+    sql_q = shlex.quote(sql)
+    flags = "-Atc" if scalar else "-c"
+    return ["bash", "-lc", f"set -euo pipefail; runuser -u postgres -- psql -d postgres {flags} {sql_q}"]
 
 
 def _postgres_scalar_query(*, credential_file: Path, database: str, sql: str) -> int:
@@ -465,11 +517,226 @@ def _postgres_scalar_query(*, credential_file: Path, database: str, sql: str) ->
     return int(raw) if raw else 0
 
 
+def _postgres_local_scalar_query(*, sql: str) -> int:
+    command = _postgres_local_superuser_command(sql=sql, scalar=True)
+    completed = run_command(command, check=True)
+    raw = (completed.stdout or "").strip()
+    return int(raw) if raw else 0
+
+
 def _mysql_scalar_query(*, credential_file: Path, sql: str) -> int:
     command = _mysql_admin_command(credential_file=credential_file, sql=sql)
     completed = run_command(command, check=True)
     raw = (completed.stdout or "").strip()
     return int(raw) if raw else 0
+
+
+def _mysql_local_scalar_query(*, sql: str) -> int:
+    command = _mysql_local_root_command(sql=sql)
+    completed = run_command(command, check=True)
+    raw = (completed.stdout or "").strip()
+    return int(raw) if raw else 0
+
+
+def _mysql_command_for_admin(*, admin_credential_file: Path | None, sql: str) -> list[str]:
+    if admin_credential_file is not None:
+        return _mysql_admin_command(credential_file=admin_credential_file, sql=sql)
+    return _mysql_local_root_command(sql=sql)
+
+
+def _mysql_scalar_for_admin(*, admin_credential_file: Path | None, sql: str) -> int:
+    if admin_credential_file is not None:
+        return _mysql_scalar_query(credential_file=admin_credential_file, sql=sql)
+    return _mysql_local_scalar_query(sql=sql)
+
+
+def _postgres_command_for_admin(*, admin_credential_file: Path | None, database: str, sql: str) -> list[str]:
+    if admin_credential_file is not None:
+        return _postgres_admin_command(credential_file=admin_credential_file, database=database, sql=sql)
+    return _postgres_local_superuser_command(sql=sql)
+
+
+def _postgres_scalar_for_admin(*, admin_credential_file: Path | None, database: str, sql: str) -> int:
+    if admin_credential_file is not None:
+        return _postgres_scalar_query(credential_file=admin_credential_file, database=database, sql=sql)
+    return _postgres_local_scalar_query(sql=sql)
+
+
+def _sql_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "''")
+
+
+def provision_database(
+    *,
+    engine: str,
+    database: str,
+    user: str,
+    password: str,
+    app_host: str,
+    app_port: int,
+    state_path: Path,
+    domain: str,
+    credential_file: Path | None = None,
+    password_file: Path | None = None,
+    admin_credential_file: Path | None = None,
+) -> dict:
+    normalized_engine = normalize_db_engine(engine)
+    db_name = normalize_database_name(database)
+    db_user = normalize_database_user(user, engine=normalized_engine)
+    if not app_host.strip():
+        raise DbServiceError("Application DB host cannot be empty.")
+    if app_port < 1:
+        raise DbServiceError("Application DB port must be >= 1.")
+    if not password:
+        raise DbServiceError("Database password is empty.")
+
+    resolved_credential_file = credential_file or default_credential_file(state_path, domain, engine=normalized_engine)
+    resolved_password_file = password_file or default_password_file(state_path, domain, engine=normalized_engine)
+
+    try:
+        if normalized_engine == "mysql":
+            database_exists = _mysql_scalar_for_admin(
+                admin_credential_file=admin_credential_file,
+                sql=f"SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '{db_name}';",
+            )
+            user_exists = _mysql_scalar_for_admin(
+                admin_credential_file=admin_credential_file,
+                sql=(
+                    "SELECT COUNT(*) FROM mysql.user "
+                    f"WHERE user = '{db_user}' AND host = '{_sql_string(app_host)}';"
+                ),
+            )
+            if database_exists:
+                raise DbServiceError(f"Database already exists: {db_name}")
+            if user_exists:
+                raise DbServiceError(f"Database user already exists: {db_user}@{app_host}")
+            sql = (
+                f"CREATE DATABASE `{db_name}`;"
+                f" CREATE USER '{db_user}'@'{_sql_string(app_host)}' IDENTIFIED BY '{_sql_string(password)}';"
+                f" GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'{_sql_string(app_host)}';"
+                " FLUSH PRIVILEGES;"
+            )
+            run_command(_mysql_command_for_admin(admin_credential_file=admin_credential_file, sql=sql), check=True)
+            write_mysql_credentials(
+                credential_file=resolved_credential_file,
+                user=db_user,
+                password=password,
+                host=app_host,
+                port=app_port,
+            )
+        else:
+            database_exists = _postgres_scalar_for_admin(
+                admin_credential_file=admin_credential_file,
+                database=db_name,
+                sql=f"SELECT COUNT(*) FROM pg_database WHERE datname = '{db_name}';",
+            )
+            user_exists = _postgres_scalar_for_admin(
+                admin_credential_file=admin_credential_file,
+                database=db_name,
+                sql=f"SELECT COUNT(*) FROM pg_roles WHERE rolname = '{db_user}';",
+            )
+            if database_exists:
+                raise DbServiceError(f"Database already exists: {db_name}")
+            if user_exists:
+                raise DbServiceError(f"Database user already exists: {db_user}")
+            run_command(
+                _postgres_command_for_admin(
+                    admin_credential_file=admin_credential_file,
+                    database=db_name,
+                    sql=f"CREATE ROLE \"{db_user}\" LOGIN PASSWORD '{_sql_string(password)}';",
+                ),
+                check=True,
+            )
+            run_command(
+                _postgres_command_for_admin(
+                    admin_credential_file=admin_credential_file,
+                    database=db_name,
+                    sql=f"CREATE DATABASE \"{db_name}\" OWNER \"{db_user}\";",
+                ),
+                check=True,
+            )
+            write_postgres_credentials(
+                credential_file=resolved_credential_file,
+                user=db_user,
+                password=password,
+                host=app_host,
+                port=app_port,
+            )
+    except ShellCommandError as exc:
+        raise DbServiceError(str(exc)) from exc
+
+    write_password_secret(password_file=resolved_password_file, password=password)
+    return {
+        "status": "ok",
+        "domain": domain,
+        "engine": normalized_engine,
+        "database": db_name,
+        "user": db_user,
+        "host": app_host,
+        "port": app_port,
+        "credential_file": str(resolved_credential_file),
+        "password_file": str(resolved_password_file),
+        "admin_credential_file": str(admin_credential_file) if admin_credential_file is not None else None,
+        "provisioned_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def deprovision_database(
+    *,
+    engine: str,
+    database: str,
+    user: str,
+    app_host: str,
+    admin_credential_file: Path | None = None,
+    drop_password_file: Path | None = None,
+    drop_credential_file: Path | None = None,
+) -> dict:
+    normalized_engine = normalize_db_engine(engine)
+    db_name = normalize_database_name(database)
+    db_user = normalize_database_user(user, engine=normalized_engine)
+    removed_files: list[str] = []
+
+    try:
+        if normalized_engine == "mysql":
+            sql = (
+                f"DROP DATABASE IF EXISTS `{db_name}`;"
+                f" DROP USER IF EXISTS '{db_user}'@'{_sql_string(app_host)}';"
+                " FLUSH PRIVILEGES;"
+            )
+            run_command(_mysql_command_for_admin(admin_credential_file=admin_credential_file, sql=sql), check=True)
+        else:
+            run_command(
+                _postgres_command_for_admin(
+                    admin_credential_file=admin_credential_file,
+                    database=db_name,
+                    sql=f'DROP DATABASE IF EXISTS "{db_name}";',
+                ),
+                check=False,
+            )
+            run_command(
+                _postgres_command_for_admin(
+                    admin_credential_file=admin_credential_file,
+                    database=db_name,
+                    sql=f'DROP ROLE IF EXISTS "{db_user}";',
+                ),
+                check=False,
+            )
+    except ShellCommandError as exc:
+        raise DbServiceError(str(exc)) from exc
+
+    for path in [drop_password_file, drop_credential_file]:
+        if path is not None and path.exists():
+            path.unlink()
+            removed_files.append(str(path))
+
+    return {
+        "status": "ok",
+        "engine": normalized_engine,
+        "database": db_name,
+        "user": db_user,
+        "host": app_host,
+        "removed_files": removed_files,
+    }
 
 
 def restore_verify_backup(

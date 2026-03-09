@@ -146,6 +146,41 @@ larops create site example.com --force --apply
 
 Use `--force` for recovery or deliberate recreation, not as the normal day-to-day path for a healthy app.
 
+## `create site --with-db` fails because the database or user already exists
+
+Symptom:
+
+```text
+Database already exists: example_com
+```
+
+Or:
+
+```text
+Database user already exists: example_com@127.0.0.1
+```
+
+Meaning:
+
+- LarOps reached the DB bootstrap step.
+- The target database or user already exists already.
+- LarOps stops instead of silently reusing or mutating an existing DB.
+
+Fix options:
+
+- Skip `--with-db` and point the app at the existing DB intentionally.
+- Or choose explicit names:
+
+```bash
+larops create site example.com --with-db --db-name appdb --db-user appuser --apply
+```
+
+- Or provision the DB first:
+
+```bash
+larops db provision example.com --database appdb --user appuser --apply
+```
+
 ## `ssl issue` fails because `certbot` is missing
 
 Symptom:

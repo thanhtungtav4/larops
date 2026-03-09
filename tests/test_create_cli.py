@@ -5,6 +5,7 @@ from subprocess import CompletedProcess
 from typer.testing import CliRunner
 
 from larops.cli import app
+from larops.services.nginx_site_service import NginxSiteServiceError
 from larops.services.ssl_service import SslServiceError
 
 runner = CliRunner()
@@ -394,6 +395,121 @@ def test_create_site_apply_uses_existing_certificate_for_https_vhost(tmp_path: P
     assert result.exit_code == 0
     assert len(captured) == 1
     assert captured[0]["https_enabled"] is True
+
+
+def test_create_site_plan_with_db_exposes_db_provision_plan(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "create",
+            "site",
+            "demo.test",
+            "--with-db",
+        ],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    provision = lines[0]["db_provision"]
+    assert provision["engine"] == "mysql"
+    assert provision["database"] == "demo_test"
+    assert provision["user"] == "demo_test"
+    assert provision["password_source"] == "generated"
+
+
+def test_create_site_apply_with_db_provisions_database_and_persists_metadata(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    captured: dict[str, object] = {}
+
+    def fake_provision_database(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "ok",
+            "domain": "demo.test",
+            "engine": kwargs["engine"],
+            "database": kwargs["database"],
+            "user": kwargs["user"],
+            "host": kwargs["app_host"],
+            "port": kwargs["app_port"],
+            "credential_file": str(kwargs["credential_file"]),
+            "password_file": str(kwargs["password_file"]),
+            "admin_credential_file": None,
+            "provisioned_at": "2026-03-09T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("larops.commands.create.provision_database", fake_provision_database)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--with-db",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert captured["engine"] == "mysql"
+    metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
+    assert metadata["database_provision"]["database"] == "demo_test"
+    assert "db credential file:" in result.stdout
+
+
+def test_create_site_atomic_with_db_rolls_back_database_on_follow_up_failure(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    deprovision_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "larops.commands.create.provision_database",
+        lambda **kwargs: {
+            "status": "ok",
+            "domain": "demo.test",
+            "engine": kwargs["engine"],
+            "database": kwargs["database"],
+            "user": kwargs["user"],
+            "host": kwargs["app_host"],
+            "port": kwargs["app_port"],
+            "credential_file": str(kwargs["credential_file"]),
+            "password_file": str(kwargs["password_file"]),
+            "admin_credential_file": None,
+            "provisioned_at": "2026-03-09T00:00:00+00:00",
+        },
+    )
+    monkeypatch.setattr(
+        "larops.commands.create.apply_nginx_site_config",
+        lambda **_kwargs: (_ for _ in ()).throw(NginxSiteServiceError("nginx failed")),
+    )
+
+    def fake_deprovision_database(**kwargs):
+        deprovision_calls.append(kwargs)
+        return {"status": "ok"}
+
+    monkeypatch.setattr("larops.commands.create.deprovision_database", fake_deprovision_database)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--with-db",
+            "--atomic",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 2
+    assert len(deprovision_calls) == 1
+    assert deprovision_calls[0]["database"] == "demo_test"
 
 
 def test_site_create_apply_short_flag(tmp_path: Path) -> None:

@@ -18,12 +18,17 @@ from larops.services.db_service import (
     backup_filename,
     build_backup_command,
     build_restore_command,
+    default_password_file,
     default_backup_dir,
     default_credential_file,
+    generate_database_password,
     list_backups,
     manifest_path,
     normalize_db_engine,
+    normalize_database_name,
+    normalize_database_user,
     prune_backups,
+    provision_database,
     read_backup_manifest,
     restore_verify_backup,
     restore_verify_report_path,
@@ -80,8 +85,29 @@ def _resolve_credential_path(
     return credential_file or default_credential_file(Path(app_ctx.config.state_path), domain, engine=engine)
 
 
+def _resolve_password_file(
+    app_ctx: AppContext,
+    domain: str,
+    password_file: Path | None,
+    *,
+    engine: str,
+) -> Path:
+    return password_file or default_password_file(Path(app_ctx.config.state_path), domain, engine=engine)
+
+
 def _resolve_cli_config_path(app_ctx: AppContext) -> Path:
     return app_ctx.config_path or DEFAULT_CONFIG_PATH
+
+
+def _emit_db_provision_summary(app_ctx: AppContext, *, provision: dict) -> None:
+    if app_ctx.json_output:
+        return
+    app_ctx.emit_output("ok", f"  engine: {provision['engine']}")
+    app_ctx.emit_output("ok", f"  database: {provision['database']}")
+    app_ctx.emit_output("ok", f"  user: {provision['user']}")
+    app_ctx.emit_output("ok", f"  host: {provision['host']}:{provision['port']}")
+    app_ctx.emit_output("ok", f"  credential file: {provision['credential_file']}")
+    app_ctx.emit_output("ok", f"  password file: {provision['password_file']}")
 
 
 @credential_app.command("set")
@@ -193,6 +219,115 @@ def credential_show(
         exists=exists,
         mode=mode,
     )
+
+
+@db_app.command("provision")
+def provision(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    engine: str = typer.Option("mysql", "--engine", help="Database engine (mysql|postgres)."),
+    database: str | None = typer.Option(None, "--database", help="Database name (default: derived from domain)."),
+    user: str | None = typer.Option(None, "--user", help="Database user (default: derived from domain)."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Application DB host."),
+    port: int | None = typer.Option(None, "--port", help="Application DB port (default: mysql=3306, postgres=5432)."),
+    password_env: str = typer.Option(
+        "",
+        "--password-env",
+        help="Optional env var containing the application DB password. If omitted, LarOps generates one.",
+    ),
+    credential_file: Path | None = typer.Option(
+        None,
+        "--credential-file",
+        help="Application credential file path.",
+        dir_okay=False,
+    ),
+    password_file: Path | None = typer.Option(
+        None,
+        "--password-file",
+        help="Application password file path.",
+        dir_okay=False,
+    ),
+    admin_credential_file: Path | None = typer.Option(
+        None,
+        "--admin-credential-file",
+        help="Optional admin credential file for provisioning. MySQL falls back to local root socket auth when omitted.",
+        dir_okay=False,
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply database provisioning."),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    try:
+        normalized_engine = normalize_db_engine(engine)
+        resolved_database = normalize_database_name(database or domain)
+        resolved_user = normalize_database_user(user or domain, engine=normalized_engine)
+    except DbServiceError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    resolved_port = port if port is not None else (5432 if normalized_engine == "postgres" else 3306)
+    if resolved_port < 1:
+        app_ctx.emit_output("error", "Database port must be >= 1.")
+        raise typer.Exit(code=2)
+
+    target_credential_file = _resolve_credential_path(app_ctx, domain, credential_file, engine=normalized_engine)
+    target_password_file = _resolve_password_file(app_ctx, domain, password_file, engine=normalized_engine)
+    supplied_password = os.getenv(password_env, "").strip() if password_env else ""
+    generated_password = not bool(supplied_password)
+
+    app_ctx.emit_output(
+        "ok",
+        f"DB provision plan prepared for {domain}",
+        domain=domain,
+        engine=normalized_engine,
+        database=resolved_database,
+        user=resolved_user,
+        host=host,
+        port=resolved_port,
+        credential_file=str(target_credential_file),
+        password_file=str(target_password_file),
+        admin_credential_file=str(admin_credential_file) if admin_credential_file is not None else None,
+        password_source="generated" if generated_password else password_env,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    password = supplied_password or generate_database_password()
+    try:
+        with CommandLock("db-provision"):
+            result = provision_database(
+                engine=normalized_engine,
+                database=resolved_database,
+                user=resolved_user,
+                password=password,
+                app_host=host,
+                app_port=resolved_port,
+                state_path=Path(app_ctx.config.state_path),
+                domain=domain,
+                credential_file=target_credential_file,
+                password_file=target_password_file,
+                admin_credential_file=admin_credential_file,
+            )
+    except (CommandLockError, DbServiceError) as exc:
+        _emit(app_ctx, "error", "db.provision.failed", "DB provision failed.", {"error": str(exc), "domain": domain})
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=1) from exc
+
+    _emit(
+        app_ctx,
+        "info",
+        "db.provision.completed",
+        "DB provision completed.",
+        {"domain": domain, "database": resolved_database, "user": resolved_user, "engine": normalized_engine},
+    )
+    app_ctx.emit_output(
+        "ok",
+        f"DB provision completed for {domain}",
+        provision=result,
+    )
+    _emit_db_provision_summary(app_ctx, provision=result)
 
 
 @db_app.command("backup")

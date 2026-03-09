@@ -28,14 +28,14 @@ Common global options:
 | --- | --- | --- |
 | `stack` | Install host package groups (`web`, `data`, `ops`, `postgres`) | `larops stack install --web --ops --apply` |
 | `bootstrap` | Bootstrap a fresh host and optionally seed the first app release | `larops bootstrap init --profile small-vps --apply` |
-| `create` | Shortcuts for first-time site creation, source bootstrap, and managed Nginx site provisioning | `larops create site example.com --git-url https://github.com/acme/app.git --apply` |
+| `create` | Shortcuts for first-time site creation, source bootstrap, managed Nginx site provisioning, and optional DB bootstrap | `larops create site example.com --git-url https://github.com/acme/app.git --with-db --apply` |
 | `site` | Site-oriented lifecycle operations | `larops site runtime enable example.com -w -s -a` |
 | `app` | Release-based app lifecycle (`create`, `deploy`, `rollback`, `info`) | `larops app deploy example.com --source /var/www/source/example.com --apply` |
 | `worker` | Queue worker runtime control | `larops worker enable example.com --queue default --concurrency 2 --apply` |
 | `scheduler` | Scheduler runtime control | `larops scheduler enable example.com --apply` |
 | `horizon` | Horizon runtime control | `larops horizon enable example.com --apply` |
 | `ssl` | Issue, renew, and inspect certificates | `larops ssl issue example.com --challenge http --apply` |
-| `db` | DB credentials, backup, restore, offsite backup, verification | `larops db backup example.com --database appdb --apply` |
+| `db` | DB credentials, provisioning, backup, restore, offsite backup, verification | `larops db provision example.com --apply` |
 | `notify` | Telegram event-stream daemon lifecycle | `larops notify telegram daemon enable --apply` |
 | `alert` | Configure and test alert channels | `larops alert test --apply` |
 | `security` | Baseline host security, reporting, and posture checks | `larops security posture` |
@@ -78,6 +78,15 @@ larops create site example.com --source /var/www/source/example.com --apply
 larops create site example.com --git-url https://github.com/acme/example-app.git --apply
 ```
 
+### Clone from Git and provision DB
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --apply
+```
+
 ## `create site` Source Rules
 
 When `larops create site <domain>` runs:
@@ -86,7 +95,8 @@ When `larops create site <domain>` runs:
 2. Otherwise LarOps looks for `deploy.source_base_path/<domain>`.
 3. If that directory is missing and `--git-url` is provided, LarOps clones into it.
 4. If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
-5. If a previous failed create already wrote app metadata, rerun with `--force`.
+5. If `--with-db` is set and the effective site has a real DB engine, LarOps provisions the application DB/user and writes the app credential/password files.
+6. If a previous failed create already wrote app metadata, rerun with `--force`.
 
 ## Production Scope
 

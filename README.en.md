@@ -147,11 +147,21 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+Git source plus DB bootstrap:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --apply
+```
+
 What `create site` does on a fresh host:
 
 - If `deploy.source_base_path/<domain>` already exists, LarOps deploys from that local source tree.
 - If the source directory is missing and `--git-url` is provided, LarOps clones the repository into `deploy.source_base_path/<domain>` first.
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
+- If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
 
 Install pinned version after a GitHub release exists:
@@ -573,6 +583,7 @@ Default source behavior:
 - If `--source` is omitted, LarOps first looks for `deploy.source_base_path/<domain>`.
 - If that directory does not exist and `--git-url` is set, LarOps clones into it before deploy.
 - If that directory does not exist and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
+- If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
 - If that directory does not exist for a non-Laravel site and no `--git-url` is provided, the command fails and asks for `--source` or `--git-url`.
 
 Create directly from Git:

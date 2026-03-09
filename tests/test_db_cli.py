@@ -241,6 +241,91 @@ def test_db_credential_set_and_show(tmp_path: Path) -> None:
     assert "Credential file status for demo.test" in show_result.stdout
 
 
+def test_db_provision_plan_mode(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "db", "provision", "demo.test"],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["engine"] == "mysql"
+    assert lines[0]["database"] == "demo_test"
+    assert lines[0]["user"] == "demo_test"
+    assert lines[0]["password_source"] == "generated"
+
+
+def test_db_provision_apply_generates_password_and_emits_summary(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_provision_database(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "ok",
+            "domain": "demo.test",
+            "engine": kwargs["engine"],
+            "database": kwargs["database"],
+            "user": kwargs["user"],
+            "host": kwargs["app_host"],
+            "port": kwargs["app_port"],
+            "credential_file": str(kwargs["credential_file"]),
+            "password_file": str(kwargs["password_file"]),
+            "admin_credential_file": None,
+            "provisioned_at": "2026-03-09T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("larops.commands.db.provision_database", fake_provision_database)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "db", "provision", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 0
+    assert captured["engine"] == "mysql"
+    assert isinstance(captured["password"], str)
+    assert len(str(captured["password"])) >= 16
+    assert "credential file:" in result.stdout
+
+
+def test_db_provision_apply_uses_password_env_when_supplied(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_provision_database(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "ok",
+            "domain": "demo.test",
+            "engine": kwargs["engine"],
+            "database": kwargs["database"],
+            "user": kwargs["user"],
+            "host": kwargs["app_host"],
+            "port": kwargs["app_port"],
+            "credential_file": str(kwargs["credential_file"]),
+            "password_file": str(kwargs["password_file"]),
+            "admin_credential_file": None,
+            "provisioned_at": "2026-03-09T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("larops.commands.db.provision_database", fake_provision_database)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "db",
+            "provision",
+            "demo.test",
+            "--password-env",
+            "DB_PASSWORD_TEST",
+            "--apply",
+        ],
+        env={"DB_PASSWORD_TEST": "known-password"},
+    )
+    assert result.exit_code == 0
+    assert captured["password"] == "known-password"
+
+
 def test_build_backup_command_sets_restrictive_umask(tmp_path: Path) -> None:
     secret = tmp_path / "db.cnf"
     write_secret(secret)

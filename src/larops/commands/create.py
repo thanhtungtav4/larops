@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import socket
@@ -28,6 +29,16 @@ from larops.services.nginx_site_service import (
     apply_nginx_site_config,
     capture_nginx_site_snapshot,
     restore_nginx_site_snapshot,
+)
+from larops.services.db_service import (
+    DbServiceError,
+    default_credential_file,
+    default_password_file,
+    deprovision_database,
+    generate_database_password,
+    normalize_database_name,
+    normalize_database_user,
+    provision_database,
 )
 from larops.services.release_service import (
     build_deploy_phase_commands,
@@ -102,6 +113,54 @@ def _emit(
             metadata=metadata or {},
         )
     )
+
+
+def _emit_create_site_summary(
+    app_ctx: AppContext,
+    *,
+    paths: Any,
+    deploy: bool,
+    release_id: str | None,
+    runtime_results: dict[str, dict],
+    ssl_result: dict | None,
+    nginx_result: dict | None,
+    db_result: dict | None,
+) -> None:
+    if app_ctx.json_output:
+        return
+
+    lines = [
+        f"  app root: {paths.root}",
+        f"  metadata: {paths.metadata}",
+    ]
+    if deploy and release_id:
+        lines.extend(
+            [
+                f"  current release: {release_id}",
+                f"  current path: {paths.current}",
+            ]
+        )
+    if nginx_result is not None:
+        lines.append(f"  nginx config: {nginx_result.get('site_config_file', 'managed')}")
+    if ssl_result is not None:
+        lines.append("  ssl: letsencrypt issued")
+    elif nginx_result is not None and nginx_result.get("https_enabled"):
+        lines.append("  ssl: existing certificate bound")
+    if runtime_results:
+        enabled = ", ".join(sorted(name for name, result in runtime_results.items() if result.get("enabled")))
+        lines.append(f"  runtime: {enabled or 'none'}")
+    if db_result is not None:
+        lines.extend(
+            [
+                f"  db engine: {db_result['engine']}",
+                f"  db name: {db_result['database']}",
+                f"  db user: {db_result['user']}",
+                f"  db credential file: {db_result['credential_file']}",
+                f"  db password file: {db_result['password_file']}",
+            ]
+        )
+    for line in lines:
+        app_ctx.emit_output("ok", line)
 
 
 def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, bool]:
@@ -683,6 +742,34 @@ def create_site(
     ),
     php: str | None = typer.Option(None, "--php", help="PHP runtime version override."),
     db: str | None = typer.Option(None, "--db", help="Database engine override."),
+    with_db: bool = typer.Option(False, "--with-db", help="Provision an application database/user automatically."),
+    db_name: str | None = typer.Option(None, "--db-name", help="Application database name override."),
+    db_user: str | None = typer.Option(None, "--db-user", help="Application database user override."),
+    db_host: str = typer.Option("127.0.0.1", "--db-host", help="Application database host."),
+    db_port: int | None = typer.Option(None, "--db-port", help="Application database port."),
+    db_password_env: str = typer.Option(
+        "",
+        "--db-password-env",
+        help="Optional env var containing the application database password. If omitted, LarOps generates one.",
+    ),
+    db_password_file: Path | None = typer.Option(
+        None,
+        "--db-password-file",
+        help="Optional application password file path.",
+        dir_okay=False,
+    ),
+    db_credential_file: Path | None = typer.Option(
+        None,
+        "--db-credential-file",
+        help="Optional application credential file path.",
+        dir_okay=False,
+    ),
+    db_admin_credential_file: Path | None = typer.Option(
+        None,
+        "--db-admin-credential-file",
+        help="Optional admin credential file for DB provisioning.",
+        dir_okay=False,
+    ),
     ssl: bool | None = typer.Option(None, "--ssl/--no-ssl", help="Enable SSL metadata flag."),
     nginx: bool | None = typer.Option(None, "--nginx/--no-nginx", help="Provision a managed Nginx site config."),
     letsencrypt: bool = typer.Option(
@@ -735,6 +822,40 @@ def create_site(
     db_engine = str(site_profile["db"])
     ssl_enabled = bool(site_profile["ssl"])
     nginx_enabled = deploy if nginx is None else nginx
+    db_provision_plan: dict[str, Any] | None = None
+
+    if with_db:
+        if db_engine == "none":
+            app_ctx.emit_output("error", "--with-db requires a site profile with a real database engine.")
+            raise typer.Exit(code=2)
+        try:
+            resolved_db_name = normalize_database_name(db_name or domain)
+            resolved_db_user = normalize_database_user(db_user or domain, engine=db_engine)
+        except DbServiceError as exc:
+            app_ctx.emit_output("error", str(exc))
+            raise typer.Exit(code=2) from exc
+        resolved_db_port = db_port if db_port is not None else (5432 if db_engine == "postgres" else 3306)
+        if resolved_db_port < 1:
+            app_ctx.emit_output("error", "Application DB port must be >= 1.")
+            raise typer.Exit(code=2)
+        resolved_db_password_file = (
+            db_password_file or default_password_file(Path(app_ctx.config.state_path), domain, engine=db_engine)
+        )
+        resolved_db_credential_file = (
+            db_credential_file or default_credential_file(Path(app_ctx.config.state_path), domain, engine=db_engine)
+        )
+        password_source = db_password_env or "generated"
+        db_provision_plan = {
+            "engine": db_engine,
+            "database": resolved_db_name,
+            "user": resolved_db_user,
+            "host": db_host,
+            "port": resolved_db_port,
+            "password_source": password_source,
+            "password_file": str(resolved_db_password_file),
+            "credential_file": str(resolved_db_credential_file),
+            "admin_credential_file": str(db_admin_credential_file) if db_admin_credential_file is not None else None,
+        }
 
     if not deploy and (runtime_plan["worker"] or runtime_plan["scheduler"] or runtime_plan["horizon"]):
         app_ctx.emit_output(
@@ -806,6 +927,7 @@ def create_site(
         runtime=runtime_plan,
         php=php_runtime,
         db=db_engine,
+        db_provision=db_provision_plan,
         ssl=ssl_enabled or letsencrypt,
         nginx=nginx_enabled,
         letsencrypt=letsencrypt,
@@ -843,6 +965,8 @@ def create_site(
     nginx_snapshot = capture_nginx_site_snapshot(domain) if atomic and deploy and nginx_enabled else None
     ssl_result: dict | None = None
     nginx_result: dict | None = None
+    db_result: dict | None = None
+    db_provisioned = False
     existing_cert_file = default_cert_file(domain)
     existing_privkey_file = existing_cert_file.parent / "privkey.pem"
     existing_certificate_available = existing_cert_file.exists() and existing_privkey_file.exists()
@@ -858,6 +982,31 @@ def create_site(
                 "created_at": datetime.now(UTC).isoformat(),
             }
             initialize_app(paths, metadata_payload, overwrite=force)
+
+            if db_provision_plan is not None:
+                password = os.getenv(db_password_env, "").strip() if db_password_env else ""
+                password = password or generate_database_password()
+                db_result = provision_database(
+                    engine=str(db_provision_plan["engine"]),
+                    database=str(db_provision_plan["database"]),
+                    user=str(db_provision_plan["user"]),
+                    password=password,
+                    app_host=str(db_provision_plan["host"]),
+                    app_port=int(db_provision_plan["port"]),
+                    state_path=Path(app_ctx.config.state_path),
+                    domain=domain,
+                    credential_file=Path(str(db_provision_plan["credential_file"])),
+                    password_file=Path(str(db_provision_plan["password_file"])),
+                    admin_credential_file=(
+                        Path(str(db_provision_plan["admin_credential_file"]))
+                        if db_provision_plan["admin_credential_file"] is not None
+                        else None
+                    ),
+                )
+                db_provisioned = True
+                metadata = load_metadata(paths.metadata)
+                metadata["database_provision"] = db_result
+                save_metadata(paths.metadata, metadata)
 
             if deploy:
                 phase_commands = build_deploy_phase_commands(app_ctx.config.deploy)
@@ -981,7 +1130,7 @@ def create_site(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError, ReleaseServiceError, NginxSiteServiceError) as exc:
+    except (AppLifecycleError, RuntimeProcessError, SslServiceError, ShellCommandError, ReleaseServiceError, NginxSiteServiceError, DbServiceError) as exc:
         if atomic:
             rollback_steps = _atomic_rollback_create_site(
                 app_ctx=app_ctx,
@@ -995,6 +1144,24 @@ def create_site(
             if nginx_snapshot is not None:
                 restore_nginx_site_snapshot(nginx_snapshot)
                 rollback_steps.append({"step": "restore_nginx_site"})
+            if db_provisioned and db_result is not None:
+                try:
+                    deprovision_database(
+                        engine=str(db_result["engine"]),
+                        database=str(db_result["database"]),
+                        user=str(db_result["user"]),
+                        app_host=str(db_result["host"]),
+                        admin_credential_file=(
+                            Path(str(db_result["admin_credential_file"]))
+                            if db_result.get("admin_credential_file")
+                            else None
+                        ),
+                        drop_password_file=Path(str(db_result["password_file"])),
+                        drop_credential_file=Path(str(db_result["credential_file"])),
+                    )
+                    rollback_steps.append({"step": "deprovision_database"})
+                except DbServiceError as rollback_exc:
+                    rollback_steps.append({"step": "deprovision_database_failed", "error": str(rollback_exc)})
         _emit(
             app_ctx,
             severity="error",
@@ -1016,7 +1183,7 @@ def create_site(
         event_type="create.site.completed",
         domain=domain,
         message="Create site completed.",
-        metadata={"deploy": deploy, "runtime": runtime_plan, "nginx": nginx_enabled},
+        metadata={"deploy": deploy, "runtime": runtime_plan, "nginx": nginx_enabled, "db": db_result},
     )
     app_ctx.emit_output(
         "ok",
@@ -1027,4 +1194,15 @@ def create_site(
         runtime_enabled=runtime_results,
         ssl_result=ssl_result,
         nginx_result=nginx_result,
+        db_result=db_result,
+    )
+    _emit_create_site_summary(
+        app_ctx,
+        paths=paths,
+        deploy=deploy,
+        release_id=release_id,
+        runtime_results=runtime_results,
+        ssl_result=ssl_result,
+        nginx_result=nginx_result,
+        db_result=db_result,
     )

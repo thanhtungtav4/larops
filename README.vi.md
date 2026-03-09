@@ -166,11 +166,21 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+Lấy source từ Git và tạo DB luôn:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --apply
+```
+
 `create site` sẽ xử lý source như sau trên host mới:
 
 - Nếu `deploy.source_base_path/<domain>` đã tồn tại, LarOps deploy từ source local đó.
 - Nếu source còn thiếu và có `--git-url`, LarOps sẽ clone repo vào `deploy.source_base_path/<domain>` trước.
 - Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
+- Nếu có `--with-db`, LarOps sẽ provision database/user của ứng dụng và ghi credential/password file trước khi deploy.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
 
 Local development:
@@ -473,6 +483,7 @@ Resolve source mặc định:
 - Nếu không có `--source`, LarOps tìm `deploy.source_base_path/<domain>`.
 - Nếu path này chưa tồn tại và có `--git-url`, LarOps clone repo vào đó rồi mới deploy.
 - Nếu path này chưa tồn tại và site hiệu lực thuộc họ Laravel, LarOps tự bootstrap source bằng `composer create-project laravel/laravel`.
+- Nếu có `--with-db`, LarOps provision database/user của ứng dụng và ghi credential/password file trước khi deploy.
 - Nếu path này chưa tồn tại cho một site không thuộc họ Laravel và không có `--git-url`, lệnh sẽ fail và yêu cầu bạn cung cấp `--source` hoặc `--git-url`.
 
 Deploy trực tiếp từ Git:

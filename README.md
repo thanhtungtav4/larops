@@ -33,6 +33,15 @@ larops bootstrap init --apply
 larops create site example.com --apply
 ```
 
+Git source + DB bootstrap:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/app.git \
+  --with-db \
+  --apply
+```
+
 Weak VPS:
 
 ```bash
@@ -66,6 +75,7 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
   - existing local source directory
   - Git clone with `--git-url`
   - automatic Laravel scaffold with `composer create-project` when the site resolves to a Laravel-family profile
+- `create site --with-db` can provision the application database, user, credential file, and password file in the same flow.
 - When deploy is enabled, `create site` also provisions a managed Nginx site config by default on supported single-node hosts.
 - If a previous `create site` run created metadata but did not finish provisioning, rerun with `--force`.
 
