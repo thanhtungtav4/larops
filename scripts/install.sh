@@ -146,7 +146,10 @@ cleanup_on_exit() {
     return 0
   fi
   rm -rf "${INSTALL_STAGING_DIR}"
-  if [[ -d "${INSTALL_BACKUP_DIR}" && ! -e "${LAROPS_INSTALL_DIR}" ]]; then
+  if [[ -e "${LAROPS_INSTALL_DIR}" ]]; then
+    rm -rf "${LAROPS_INSTALL_DIR}"
+  fi
+  if [[ -d "${INSTALL_BACKUP_DIR}" ]]; then
     mv "${INSTALL_BACKUP_DIR}" "${LAROPS_INSTALL_DIR}"
   fi
 }
@@ -229,7 +232,7 @@ setup_virtualenv() {
   "${target_dir}/.venv/bin/pip" install -e "${target_dir}"
 }
 
-activate_install() {
+switch_install_dir() {
   local staged_dir="$1"
 
   if [[ -e "${LAROPS_INSTALL_DIR}" ]]; then
@@ -237,6 +240,9 @@ activate_install() {
   fi
 
   mv "${staged_dir}" "${LAROPS_INSTALL_DIR}"
+}
+
+finalize_install() {
   ln -sf "${LAROPS_INSTALL_DIR}/.venv/bin/larops" /usr/local/bin/larops
 
   if [[ ! -f "${LAROPS_CONFIG_PATH}" ]]; then
@@ -278,8 +284,9 @@ else
   stage_from_release_asset "${tag}" "${INSTALL_STAGING_DIR}"
 fi
 
-setup_virtualenv "${INSTALL_STAGING_DIR}"
-activate_install "${INSTALL_STAGING_DIR}"
+switch_install_dir "${INSTALL_STAGING_DIR}"
+setup_virtualenv "${LAROPS_INSTALL_DIR}"
+finalize_install
 
 echo "[larops-install] Done."
 echo "[larops-install] Next step (WordOps-style full bootstrap):"
