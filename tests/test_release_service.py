@@ -5,6 +5,7 @@ from larops.config import DeployConfig
 from larops.services.release_service import (
     build_deploy_phase_commands,
     build_rollback_phase_commands,
+    resolve_build_commands_for_release,
     run_release_commands,
 )
 
@@ -72,3 +73,24 @@ def test_run_release_commands_passes_timeout(monkeypatch, tmp_path: Path) -> Non
     assert reports[0]["phase"] == "build"
     assert reports[0]["stdout"] == "ok"
     assert calls[0][1] == 123
+
+
+def test_resolve_build_commands_for_release_auto_adds_composer_install(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    (release_dir / "composer.json").write_text("{}", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
+    assert commands == ["composer install --no-dev --optimize-autoloader"]
+
+
+def test_resolve_build_commands_for_release_skips_when_vendor_exists(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    (release_dir / "vendor").mkdir(parents=True, exist_ok=True)
+    (release_dir / "composer.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vendor" / "autoload.php").write_text("<?php", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
+    assert commands == []

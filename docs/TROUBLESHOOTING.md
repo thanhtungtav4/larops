@@ -230,6 +230,28 @@ If you do not want a local DB on the VPS:
 - remove `--with-db`
 - provision/use an existing external database instead
 
+## Laravel app fails because `vendor/autoload.php` is missing
+
+Symptom:
+
+```text
+Failed opening required '.../vendor/autoload.php'
+```
+
+Meaning:
+
+- The release source was deployed without PHP dependencies installed.
+- Current LarOps now auto-runs `composer install` for releases that contain `composer.json` and are missing `vendor/autoload.php`.
+- If you hit this on an older host build, update LarOps and make sure `composer` is installed in the web stack.
+
+Fix:
+
+```bash
+larops stack install --web --apply
+```
+
+Then redeploy or recreate the site.
+
 ## `ssl issue` fails because `certbot` is missing
 
 Symptom:

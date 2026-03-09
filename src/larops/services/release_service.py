@@ -91,6 +91,17 @@ def _composer_install_command(config: DeployConfig) -> str:
     return " ".join([config.composer_binary, *flags])
 
 
+def resolve_build_commands_for_release(*, config: DeployConfig, release_dir: Path, commands: list[str]) -> list[str]:
+    resolved = list(commands)
+    if any(command.strip().startswith(f"{config.composer_binary} install") for command in resolved):
+        return resolved
+    if not (release_dir / "composer.json").exists():
+        return resolved
+    if (release_dir / "vendor" / "autoload.php").exists():
+        return resolved
+    return [_composer_install_command(config), *resolved]
+
+
 def build_deploy_phase_commands(config: DeployConfig) -> dict[str, list[str]]:
     build_commands: list[str] = []
     if config.composer_install:

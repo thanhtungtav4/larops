@@ -16,6 +16,7 @@ DEBIAN_PACKAGE_GROUPS = {
     "web": [
         "nginx",
         "certbot",
+        "composer",
         "php8.3-fpm",
         "php8.3-cli",
         "php8.3-mbstring",
@@ -32,6 +33,7 @@ EL9_COMMON_PACKAGE_GROUPS = {
     "web": [
         "nginx",
         "certbot",
+        "composer",
         "php-fpm",
         "php-cli",
         "php-mbstring",

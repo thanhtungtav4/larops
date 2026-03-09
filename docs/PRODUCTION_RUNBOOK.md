@@ -222,6 +222,7 @@ Source preparation rules:
 - If `--source` is omitted, LarOps first uses `deploy.source_base_path/<domain>`.
 - If that directory is missing and `--git-url` is set, LarOps clones into it before deploy.
 - If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
+- If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - If `--with-db` is set, LarOps provisions the application database and writes the app credential/password files before deploy.
 - If a previous failed create already wrote app metadata, rerun with `--force`.
 

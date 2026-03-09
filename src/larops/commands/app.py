@@ -29,6 +29,7 @@ from larops.services.release_service import (
     build_deploy_phase_commands,
     build_rollback_phase_commands,
     prepare_release_candidate,
+    resolve_build_commands_for_release,
     refresh_runtime_after_activate,
     remove_release_dir,
     run_http_health_check,
@@ -331,10 +332,15 @@ def deploy(
                 shared_dirs=app_ctx.config.deploy.shared_dirs,
                 shared_files=app_ctx.config.deploy.shared_files,
             )
+            build_commands = resolve_build_commands_for_release(
+                config=app_ctx.config.deploy,
+                release_dir=release_dir,
+                commands=phase_commands["build"],
+            )
             build_reports = run_release_commands(
                 workdir=release_dir,
                 phase="build",
-                commands=phase_commands["build"],
+                commands=build_commands,
                 timeout_seconds=app_ctx.config.deploy.build_timeout_seconds,
             )
             pre_activate_reports = run_release_commands(
