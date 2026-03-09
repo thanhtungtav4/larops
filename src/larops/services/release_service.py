@@ -83,7 +83,7 @@ def _normalized_timeout(timeout_seconds: int | None) -> int | None:
 
 
 def _composer_install_command(config: DeployConfig) -> str:
-    flags = ["install"]
+    flags = ["install", "--no-interaction", "--no-progress", "--no-scripts"]
     if config.composer_no_dev:
         flags.append("--no-dev")
     if config.composer_optimize_autoloader:

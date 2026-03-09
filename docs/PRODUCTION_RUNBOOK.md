@@ -231,9 +231,11 @@ Source preparation rules:
 - If that directory is missing and `--git-url` is set, LarOps clones into it before deploy.
 - If that directory is missing and the effective site is Laravel-family, LarOps bootstraps it with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
+- Composer build install runs with `--no-scripts`; Laravel package discovery is deferred to the app bootstrap phase after `.env` and release symlinks are ready.
 - If `--with-db` is set, LarOps provisions the application database and writes the app credential/password files before deploy.
 - When the deployed source contains `artisan`, `create site` also auto-runs app bootstrap after deploy:
   - `php artisan key:generate --force` when `APP_KEY` is missing
+  - `php artisan package:discover --ansi`
   - `php artisan migrate --force`
   - `php artisan optimize:clear`
   - `php artisan optimize`

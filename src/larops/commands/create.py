@@ -198,6 +198,7 @@ def _resolve_bootstrap_app_commands(*, site_profile: dict[str, Any], current_pat
         commands.append("php artisan key:generate --force")
     commands.extend(
         [
+            "php artisan package:discover --ansi",
             "php artisan migrate --force",
             "php artisan optimize:clear",
             "php artisan optimize",

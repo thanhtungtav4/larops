@@ -271,6 +271,7 @@ def test_create_site_apply_bootstraps_laravel_artisan_after_deploy(tmp_path: Pat
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"]
     assert len(bootstrap) == 1
     assert bootstrap[0][0] == "php artisan key:generate --force"
+    assert "php artisan package:discover --ansi" in bootstrap[0]
     assert "php artisan migrate --force" in bootstrap[0]
     assert "php artisan optimize" in bootstrap[0]
     assert "app bootstrap: completed" in result.stdout
@@ -295,7 +296,7 @@ def test_create_site_apply_skips_key_generate_when_app_key_exists(tmp_path: Path
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
     assert "php artisan key:generate --force" not in bootstrap
-    assert bootstrap[0] == "php artisan migrate --force"
+    assert bootstrap[0] == "php artisan package:discover --ansi"
 
 
 def test_create_site_apply_skips_app_bootstrap_when_artisan_is_missing(tmp_path: Path, monkeypatch) -> None:

@@ -258,9 +258,10 @@ Usually no for a fresh `create site` run when the deployed source contains `arti
 
 Current LarOps behavior:
 
-- auto-runs `composer install` when the release is missing `vendor/autoload.php`
+- auto-runs `composer install --no-scripts` when the release is missing `vendor/autoload.php`
 - auto-runs Laravel bootstrap after deploy:
   - `key:generate` only when `APP_KEY` is missing
+  - `package:discover --ansi`
   - `migrate --force`
   - `optimize:clear`
   - `optimize`
