@@ -653,6 +653,64 @@ def test_create_site_force_reuses_provisioned_db_metadata_and_resyncs_env(tmp_pa
     assert "DB_PASSWORD=secret-123" in env_body
 
 
+def test_create_site_force_recovers_db_env_from_secret_files_when_metadata_was_lost(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    state_path = tmp_path / "state"
+    apps_root = tmp_path / "apps" / "demo.test"
+    secret_dir = state_path / "secrets" / "db"
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    (secret_dir / "demo.test.txt").write_text("secret-456\n", encoding="utf-8")
+    (secret_dir / "demo.test.cnf").write_text(
+        "[client]\nuser=demo_test\npassword=secret-456\nhost=127.0.0.1\nport=3306\n",
+        encoding="utf-8",
+    )
+    metadata_path = state_path / "apps" / "demo.test.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "domain": "demo.test",
+                "php": "8.4",
+                "db": "mysql",
+                "ssl": True,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (apps_root / "shared").mkdir(parents=True, exist_ok=True)
+    (apps_root / "shared" / ".env").write_text("APP_NAME=Demo\nDB_HOST=localhost\n", encoding="utf-8")
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        "larops.commands.create.run_http_health_check",
+        lambda **_kwargs: {"enabled": False, "checked": False, "status": "skipped"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--force",
+            "--apply",
+        ],
+    )
+
+    assert result.exit_code == 0
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["database_provision"]["host"] == "127.0.0.1"
+    assert metadata["database_provision"]["user"] == "demo_test"
+    env_body = (apps_root / "shared" / ".env").read_text(encoding="utf-8")
+    assert "DB_HOST=127.0.0.1" in env_body
+    assert "DB_USERNAME=demo_test" in env_body
+    assert "DB_PASSWORD=secret-456" in env_body
+
+
 def test_site_create_apply_short_flag(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     _ = make_source(tmp_path, "demo.test")

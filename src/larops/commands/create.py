@@ -246,6 +246,68 @@ def _sync_env_from_database_provision(*, paths: Any, database_provision: dict[st
     return env_sync, password
 
 
+def _read_mysql_client_settings_from_file(credential_file: Path) -> dict[str, str]:
+    settings: dict[str, str] = {}
+    if not credential_file.exists():
+        return settings
+    in_client_section = False
+    for raw_line in credential_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_client_section = line.lower() == "[client]"
+            continue
+        if not in_client_section or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        settings[key.strip().lower()] = value.strip()
+    return settings
+
+
+def _infer_existing_database_provision(
+    *,
+    state_path: Path,
+    domain: str,
+    engine: str,
+    db_name_override: str | None,
+    db_user_override: str | None,
+    db_host_override: str,
+    db_port_override: int | None,
+) -> dict[str, Any] | None:
+    normalized_engine = engine.strip().lower()
+    if normalized_engine == "none":
+        return None
+    credential_file = default_credential_file(state_path, domain, engine=normalized_engine)
+    password_file = default_password_file(state_path, domain, engine=normalized_engine)
+    if not credential_file.exists() or not password_file.exists():
+        return None
+
+    host = db_host_override
+    port = db_port_override if db_port_override is not None else (5432 if normalized_engine == "postgres" else 3306)
+    user = normalize_database_user(db_user_override or domain, engine=normalized_engine)
+    database = normalize_database_name(db_name_override or domain)
+
+    if normalized_engine == "mysql":
+        mysql_settings = _read_mysql_client_settings_from_file(credential_file)
+        host = mysql_settings.get("host", host) or host
+        port = int(mysql_settings.get("port", str(port)) or port)
+        user = mysql_settings.get("user", user) or user
+
+    return {
+        "status": "reused",
+        "domain": domain,
+        "engine": normalized_engine,
+        "database": database,
+        "user": user,
+        "host": host,
+        "port": port,
+        "credential_file": str(credential_file),
+        "password_file": str(password_file),
+        "admin_credential_file": None,
+    }
+
+
 def _resolve_targets(worker: bool, scheduler: bool, horizon: bool) -> dict[str, bool]:
     if worker or scheduler or horizon:
         return {
@@ -1060,6 +1122,18 @@ def create_site(
         with CommandLock(_lock_name(domain)):
             _prepare_source(plan=source_prepare)
             preserved_metadata = _preserved_site_metadata(paths) if force else {}
+            if db_provision_plan is None and "database_provision" not in preserved_metadata:
+                inferred_database_provision = _infer_existing_database_provision(
+                    state_path=Path(app_ctx.config.state_path),
+                    domain=domain,
+                    engine=db_engine,
+                    db_name_override=db_name,
+                    db_user_override=db_user,
+                    db_host_override=db_host,
+                    db_port_override=db_port,
+                )
+                if inferred_database_provision is not None:
+                    preserved_metadata["database_provision"] = inferred_database_provision
             metadata_payload = {
                 "domain": domain,
                 "php": php_runtime,
