@@ -35,6 +35,12 @@ def write_config(tmp_path: Path) -> Path:
     return config_file
 
 
+def el9_env(tmp_path: Path, *, os_id: str = "rocky") -> dict[str, str]:
+    os_release = tmp_path / "os-release"
+    os_release.write_text(f'ID="{os_id}"\nVERSION_ID="9.4"\n', encoding="utf-8")
+    return {"LAROPS_STACK_OS_RELEASE_PATH": str(os_release)}
+
+
 def test_monitor_scan_plan_mode(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(app, ["--config", str(config), "monitor", "scan", "run"])
@@ -488,6 +494,59 @@ def test_monitor_service_run_profile_resolves_php_fpm_unit(tmp_path: Path, monke
     payload = lines[-1]["result"]
     services = [item["service"] for item in payload["services"]]
     assert services == ["nginx", "php8.3-fpm", "mariadb", "redis-server"]
+
+
+def test_monitor_service_run_profile_resolves_el9_php_fpm_and_redis_units(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    known_services = {
+        "nginx": {"active": "active", "enabled": "enabled"},
+        "php-fpm": {"active": "active", "enabled": "enabled"},
+        "mariadb": {"active": "active", "enabled": "enabled"},
+        "redis": {"active": "active", "enabled": "enabled"},
+    }
+
+    def fake_run_command(
+        command: list[str],
+        *,
+        check: bool = True,
+        timeout_seconds: int | None = None,
+    ) -> CompletedProcess[str]:
+        if command[:2] == ["systemctl", "is-active"]:
+            service = command[2]
+            if service in known_services:
+                return CompletedProcess(command, 0, stdout=f"{known_services[service]['active']}\n", stderr="")
+            return CompletedProcess(command, 3, stdout="unknown\n", stderr="")
+        if command[:2] == ["systemctl", "is-enabled"]:
+            service = command[2]
+            if service in known_services:
+                return CompletedProcess(command, 0, stdout=f"{known_services[service]['enabled']}\n", stderr="")
+            return CompletedProcess(command, 1, stdout="", stderr="Failed to get unit file state\n")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.services.monitor_service_watch.run_command", fake_run_command)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "monitor",
+            "service",
+            "run",
+            "--profile",
+            "laravel-host",
+            "--no-restart-down-services",
+            "--apply",
+        ],
+        env=el9_env(tmp_path),
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    payload = lines[-1]["result"]
+    services = [item["service"] for item in payload["services"]]
+    assert services == ["nginx", "php-fpm", "mariadb", "redis"]
 
 
 def test_monitor_service_run_does_not_restart_activating_service(tmp_path: Path, monkeypatch) -> None:

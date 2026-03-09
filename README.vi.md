@@ -292,6 +292,8 @@ Lệnh này không làm gì:
 
 - Không apply thay đổi nào
 - Đây là lệnh inspect/report, không phải remediation command
+- Không thể tự chứng minh snippet hardening của Nginx đang active nếu bạn không truyền `--nginx-server-config-file`
+- Nếu LarOps chỉ thấy các file hardening do nó quản lý nhưng chưa verify được vhost include snippet, report sẽ xuống `warn` thay vì báo Nginx đã được harden
 
 ### `larops monitor scan run`
 

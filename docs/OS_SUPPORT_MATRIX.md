@@ -19,7 +19,7 @@ This matrix separates:
 | Debian 13 | Experimental | Expected to work with `apt` + `systemd`, but package naming still follows Debian-family assumptions from current stack map |
 | Rocky Linux 9 | Experimental | Installer + stack package planning/install are supported via `dnf`; baseline `firewalld` + Fail2ban security flow is available experimentally |
 | AlmaLinux 9 | Experimental | Same scope as Rocky Linux 9 |
-| RHEL 9 | Experimental | Installer + stack package planning/install are supported via `dnf`; `security install` remains experimental and may still require manual Fail2ban repo preparation |
+| RHEL 9 | Experimental | Installer + stack package planning/install are supported via `dnf`; LarOps will attempt the EPEL + Fail2ban + firewalld path, but repo preparation can still require manual steps |
 | Amazon Linux 2023 | Planned | Needs package/service abstraction review |
 | Alpine Linux | Not planned | Current architecture assumes `systemd`, Debian-style package naming, and glibc-oriented host tooling |
 | Arch Linux | Not planned | Current architecture is not targeting rolling-release distributions |

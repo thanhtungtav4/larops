@@ -289,6 +289,11 @@ What it does:
   - `secure nginx`
   - monitor timers
   - Telegram notifier
+
+What it does not do:
+
+- It does not magically prove the Nginx hardening snippet is active unless you pass `--nginx-server-config-file`.
+- If LarOps can see the managed Nginx files but cannot verify that a vhost includes the snippet, posture will warn instead of claiming Nginx hardening is active.
   - registered app monitor timers
 
 What it does not do:

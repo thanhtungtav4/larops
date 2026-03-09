@@ -356,6 +356,23 @@ def _service_configured(status: dict[str, Any], *, systemd_manage: bool) -> bool
     return str(systemd.get("active")) == "active" and str(systemd.get("enabled")) in {"enabled", "static"}
 
 
+def _secure_nginx_check(secure_nginx: dict[str, Any]) -> str:
+    if not (
+        secure_nginx["http_config"]["exists"]
+        and secure_nginx["http_config"]["managed"]
+        and secure_nginx["server_snippet"]["exists"]
+        and secure_nginx["server_snippet"]["managed"]
+    ):
+        return "error"
+
+    include_status = secure_nginx["server_include"]
+    if include_status["path"] is None:
+        return "warn"
+    if not include_status.get("exists"):
+        return "error"
+    return "ok" if include_status.get("include_present") is True else "error"
+
+
 def collect_security_posture(
     *,
     state_path: Path,
@@ -390,18 +407,7 @@ def collect_security_posture(
     checks = {
         "baseline": baseline_level,
         "secure_ssh": "ok" if secure_ssh["exists"] and secure_ssh["managed"] else "error",
-        "secure_nginx": "ok"
-        if (
-            secure_nginx["http_config"]["exists"]
-            and secure_nginx["http_config"]["managed"]
-            and secure_nginx["server_snippet"]["exists"]
-            and secure_nginx["server_snippet"]["managed"]
-            and (
-                secure_nginx["server_include"]["include_present"] is None
-                or secure_nginx["server_include"]["include_present"] is True
-            )
-        )
-        else "error",
+        "secure_nginx": _secure_nginx_check(secure_nginx),
         "scan_timer": "ok" if _timer_configured(scan_timer, systemd_manage=systemd_manage) else "error",
         "fim_timer": "ok" if _timer_configured(fim_timer, systemd_manage=systemd_manage) else "error",
         "service_watchdog_timer": "ok" if _timer_configured(service_timer, systemd_manage=systemd_manage) else "error",

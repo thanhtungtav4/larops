@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from larops.core.shell import ShellCommandError, run_command
+from larops.services.stack_service import StackServiceError, detect_stack_platform
 
 
 class MonitorServiceWatchError(RuntimeError):
@@ -24,8 +25,6 @@ _SERVICE_ALIASES = {
     "postgres": "postgresql",
     "postgresql": "postgresql",
     "nginx": "nginx",
-    "redis": "redis-server",
-    "redis-server": "redis-server",
 }
 
 _PHP_FPM_CANDIDATES = [
@@ -64,11 +63,29 @@ def is_service_healthy(active_state: str) -> bool:
     return active_state.strip().lower() in _HEALTHY_ACTIVE_STATES
 
 
+def _platform_family() -> str | None:
+    try:
+        return detect_stack_platform().family
+    except StackServiceError:
+        return None
+
+
 def _resolve_php_fpm_service() -> str:
     for candidate in _PHP_FPM_CANDIDATES:
         if _service_exists(candidate):
             return candidate
-    return "php8.3-fpm"
+    return "php-fpm" if _platform_family() == "el9" else "php8.3-fpm"
+
+
+def _resolve_redis_service(*, requested_name: str | None = None) -> str:
+    candidates = []
+    if requested_name:
+        candidates.append(requested_name)
+    candidates.extend(["redis-server", "redis"])
+    for candidate in dict.fromkeys(candidates):
+        if _service_exists(candidate):
+            return candidate
+    return "redis" if _platform_family() == "el9" else "redis-server"
 
 
 def normalize_service_name(name: str) -> str:
@@ -78,6 +95,8 @@ def normalize_service_name(name: str) -> str:
     lowered = raw.lower()
     if lowered in {"php", "php-fpm", "phpfpm"}:
         return _resolve_php_fpm_service()
+    if lowered in {"redis", "redis-server"}:
+        return _resolve_redis_service(requested_name=lowered)
     normalized = _SERVICE_ALIASES.get(lowered, raw)
     return normalized
 

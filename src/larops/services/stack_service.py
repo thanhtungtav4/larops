@@ -108,7 +108,7 @@ def package_groups_for_platform(platform: StackPlatform) -> dict[str, list[str]]
         return DEBIAN_PACKAGE_GROUPS
     if platform.family == "el9":
         groups = {key: list(value) for key, value in EL9_COMMON_PACKAGE_GROUPS.items()}
-        if platform.os_id in {"rocky", "almalinux"}:
+        if platform.os_id in {"rocky", "almalinux", "rhel"}:
             groups["ops"] = ["epel-release", "fail2ban", "firewalld"]
         else:
             groups["ops"] = ["firewalld"]

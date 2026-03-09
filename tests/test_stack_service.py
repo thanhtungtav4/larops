@@ -69,6 +69,18 @@ def test_detect_stack_platform_supports_rhel_9_as_experimental(tmp_path: Path) -
     assert platform.support_level == "experimental"
 
 
+def test_build_install_commands_use_dnf_for_rhel_9_and_attempt_fail2ban_install(tmp_path: Path) -> None:
+    os_release = write_os_release(tmp_path, os_id="rhel", version_id="9.3")
+    platform = detect_stack_platform(os_release_path=os_release)
+    commands = build_install_commands(["ops"], platform=platform)
+    assert commands[0] == ["dnf", "makecache", "-y"]
+    assert commands[1] == ["dnf", "install", "-y", "epel-release"]
+    assert commands[2] == ["dnf", "makecache", "-y"]
+    assert commands[3][0:3] == ["dnf", "install", "-y"]
+    assert "fail2ban" in commands[3]
+    assert "firewalld" in commands[3]
+
+
 def test_build_stack_plan_includes_platform_metadata(tmp_path: Path) -> None:
     os_release = write_os_release(tmp_path, os_id="debian", version_id="12")
     plan = build_stack_plan(["web"], os_release_path=os_release)
