@@ -225,6 +225,11 @@ Source preparation rules:
 - If `--with-db` is set, LarOps provisions the application database and writes the app credential/password files before deploy.
 - If a previous failed create already wrote app metadata, rerun with `--force`.
 
+For small VPS hosts, remember:
+
+- `bootstrap init --profile small-vps` does not install the local `data` stack.
+- If you want `create site --with-db` to provision a local MariaDB database on the same VPS, bootstrap with `--data`.
+
 Managed web ingress rules:
 
 - When deploy is enabled, `create site` provisions a managed Nginx site config by default.

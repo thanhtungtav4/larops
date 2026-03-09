@@ -49,6 +49,13 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+Weak VPS with local DB:
+
+```bash
+larops bootstrap init --profile small-vps --data --apply
+larops create site example.com --profile small-vps --with-db --apply
+```
+
 ## Command Overview
 
 | Group | Purpose | Example |

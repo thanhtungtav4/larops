@@ -326,6 +326,17 @@ def test_db_provision_apply_uses_password_env_when_supplied(tmp_path: Path, monk
     assert captured["password"] == "known-password"
 
 
+def test_db_provision_apply_fails_clearly_when_mysql_binary_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    monkeypatch.setattr("larops.services.db_service.shutil.which", lambda _name: None)
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "db", "provision", "demo.test", "--apply"],
+    )
+    assert result.exit_code == 1
+    assert "MySQL client binary not found (`mysql`)" in result.stdout
+
+
 def test_build_backup_command_sets_restrictive_umask(tmp_path: Path) -> None:
     secret = tmp_path / "db.cnf"
     write_secret(secret)

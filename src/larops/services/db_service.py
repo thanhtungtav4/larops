@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import stat
 import string
 from datetime import UTC, datetime
@@ -566,6 +567,28 @@ def _sql_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "''")
 
 
+def _ensure_db_provision_binaries(*, engine: str, admin_credential_file: Path | None) -> None:
+    normalized_engine = normalize_db_engine(engine)
+    if normalized_engine == "mysql":
+        if shutil.which("mysql") is None:
+            raise DbServiceError(
+                "MySQL client binary not found (`mysql`). Local DB provisioning requires the data stack. "
+                "If you used `bootstrap init --profile small-vps`, rerun it with `--data --apply`, "
+                "or skip `--with-db` and use an existing database."
+            )
+        return
+
+    if shutil.which("psql") is None:
+        raise DbServiceError(
+            "PostgreSQL client binary not found (`psql`). Local DB provisioning requires the postgres stack "
+            "or a host with PostgreSQL client tools installed."
+        )
+    if admin_credential_file is None and shutil.which("runuser") is None:
+        raise DbServiceError(
+            "Local PostgreSQL provisioning requires `runuser` when no admin credential file is supplied."
+        )
+
+
 def provision_database(
     *,
     engine: str,
@@ -589,6 +612,7 @@ def provision_database(
         raise DbServiceError("Application DB port must be >= 1.")
     if not password:
         raise DbServiceError("Database password is empty.")
+    _ensure_db_provision_binaries(engine=normalized_engine, admin_credential_file=admin_credential_file)
 
     resolved_credential_file = credential_file or default_credential_file(state_path, domain, engine=normalized_engine)
     resolved_password_file = password_file or default_password_file(state_path, domain, engine=normalized_engine)

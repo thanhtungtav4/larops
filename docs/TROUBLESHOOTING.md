@@ -181,6 +181,33 @@ larops create site example.com --with-db --db-name appdb --db-user appuser --app
 larops db provision example.com --database appdb --user appuser --apply
 ```
 
+## `create site --with-db` fails with `mysql: command not found`
+
+Symptom:
+
+```text
+mysql: command not found
+```
+
+Meaning:
+
+- The host does not have the local MySQL/MariaDB client installed.
+- This is expected if you bootstrapped with `--profile small-vps` without `--data`.
+
+Fix:
+
+If you want a local DB on the same VPS:
+
+```bash
+larops bootstrap init --profile small-vps --data --apply
+larops create site example.com --profile small-vps --with-db --force --apply
+```
+
+If you do not want a local DB on the VPS:
+
+- remove `--with-db`
+- provision/use an existing external database instead
+
 ## `ssl issue` fails because `certbot` is missing
 
 Symptom:

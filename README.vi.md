@@ -166,6 +166,13 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+VPS yếu nhưng vẫn muốn local DB:
+
+```bash
+larops bootstrap init --profile small-vps --data --apply
+larops create site example.com --profile small-vps --with-db --apply
+```
+
 Lấy source từ Git và tạo DB luôn:
 
 ```bash

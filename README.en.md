@@ -147,6 +147,13 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+Small VPS with local DB:
+
+```bash
+larops bootstrap init --profile small-vps --data --apply
+larops create site example.com --profile small-vps --with-db --apply
+```
+
 Git source plus DB bootstrap:
 
 ```bash
