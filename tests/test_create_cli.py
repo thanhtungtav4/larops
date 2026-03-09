@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from typer.testing import CliRunner
 
@@ -117,6 +118,7 @@ def test_create_site_small_vps_profile_applies_lightweight_defaults(tmp_path: Pa
     assert lines[0]["runtime"]["scheduler"] is True
     assert lines[0]["runtime"]["horizon"] is False
     assert lines[0]["ssl"] is True
+    assert lines[0]["source_prepare"]["mode"] == "laravel-init"
 
 
 def test_create_site_small_vps_profile_allows_explicit_worker_override(tmp_path: Path) -> None:
@@ -165,6 +167,87 @@ def test_create_site_small_vps_profile_composes_consistently_with_explicit_type(
     assert lines[0]["runtime"]["scheduler"] is False
     assert lines[0]["runtime"]["horizon"] is False
     assert lines[0]["ssl"] is True
+
+
+def test_create_site_plan_mode_uses_git_clone_when_git_url_is_provided(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--json",
+            "create",
+            "site",
+            "demo.test",
+            "--git-url",
+            "https://github.com/example/demo.git",
+        ],
+    )
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["source_prepare"]["mode"] == "git-clone"
+    assert lines[0]["source_prepare"]["git_url"] == "https://github.com/example/demo.git"
+
+
+def test_create_site_apply_small_vps_bootstraps_laravel_source_when_missing(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command[:3] == ["composer", "create-project", "laravel/laravel"]:
+            target = Path(command[3])
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+            return CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.commands.create.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--profile",
+            "small-vps",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    source = tmp_path / "sources" / "demo.test"
+    assert (source / "artisan").exists()
+
+
+def test_create_site_apply_clones_git_source_when_requested(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+
+    def fake_run_command(command: list[str], *, check: bool = True, timeout_seconds: int | None = None) -> CompletedProcess[str]:
+        if command[:4] == ["git", "clone", "--branch", "main"]:
+            target = Path(command[-1])
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+            return CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("larops.commands.create.run_command", fake_run_command)
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--git-url",
+            "https://github.com/example/demo.git",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    source = tmp_path / "sources" / "demo.test"
+    assert (source / "artisan").exists()
 
 
 def test_create_site_invalid_type_rejected(tmp_path: Path) -> None:

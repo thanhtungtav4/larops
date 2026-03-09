@@ -10,7 +10,7 @@ from typing import Any
 import typer
 
 from larops.core.locks import CommandLock, CommandLockError
-from larops.core.shell import ShellCommandError
+from larops.core.shell import ShellCommandError, run_command
 from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_lifecycle import (
@@ -68,6 +68,8 @@ _CACHE_PRESETS: dict[str, dict[str, Any]] = {
     "redis": {"ssl": True, "runtime": {"worker": True}},
     "supercache": {"ssl": True},
 }
+
+_LARAVEL_SOURCE_BOOTSTRAP_TYPES = {"laravel", "queue", "horizon"}
 
 
 def _lock_name(domain: str) -> str:
@@ -202,6 +204,73 @@ def _validate_worker_options(*, concurrency: int, tries: int, timeout: int) -> N
         raise RuntimeProcessError("Worker tries must be >= 1.")
     if timeout < 1:
         raise RuntimeProcessError("Worker timeout must be >= 1 second.")
+
+
+def _is_effective_laravel_site(site_profile: dict[str, Any]) -> bool:
+    return str(site_profile.get("type", "")).lower() in _LARAVEL_SOURCE_BOOTSTRAP_TYPES
+
+
+def _source_prepare_plan(
+    *,
+    source_path: Path,
+    git_url: str | None,
+    ref: str,
+    site_profile: dict[str, Any],
+    composer_binary: str,
+) -> dict[str, Any]:
+    if source_path.exists() and source_path.is_dir():
+        return {"mode": "existing", "path": str(source_path)}
+    if git_url:
+        return {
+            "mode": "git-clone",
+            "path": str(source_path),
+            "git_url": git_url,
+            "git_ref": ref,
+            "command": ["git", "clone", "--branch", ref, "--single-branch", git_url, str(source_path)],
+        }
+    if _is_effective_laravel_site(site_profile):
+        return {
+            "mode": "laravel-init",
+            "path": str(source_path),
+            "composer_binary": composer_binary,
+            "command": [composer_binary, "create-project", "laravel/laravel", str(source_path)],
+        }
+    return {
+        "mode": "missing",
+        "path": str(source_path),
+        "detail": "Provide --source or --git-url when the source directory does not exist.",
+    }
+
+
+def _ensure_empty_source_target(source_path: Path) -> None:
+    if source_path.exists():
+        if not source_path.is_dir():
+            raise RuntimeProcessError(f"Source path exists but is not a directory: {source_path}")
+        if any(source_path.iterdir()):
+            raise RuntimeProcessError(f"Source path already exists and is not empty: {source_path}")
+        source_path.rmdir()
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_source(*, plan: dict[str, Any]) -> None:
+    mode = str(plan.get("mode", "missing"))
+    source_path = Path(str(plan["path"]))
+    if mode == "existing":
+        if not source_path.exists() or not source_path.is_dir():
+            raise RuntimeProcessError(f"Source path does not exist or is not a directory: {source_path}")
+        return
+    if mode == "git-clone":
+        _ensure_empty_source_target(source_path)
+        run_command(
+            ["git", "clone", "--branch", str(plan["git_ref"]), "--single-branch", str(plan["git_url"]), str(source_path)],
+            check=True,
+        )
+        return
+    if mode == "laravel-init":
+        _ensure_empty_source_target(source_path)
+        run_command([str(plan["composer_binary"]), "create-project", "laravel/laravel", str(source_path)], check=True)
+        return
+    raise RuntimeProcessError(str(plan.get("detail") or f"Source path does not exist or is not a directory: {source_path}"))
 
 
 def _runtime_spec_path(state_path: Path, domain: str, process_type: str) -> Path:
@@ -572,6 +641,11 @@ def create_site(
         file_okay=False,
     ),
     ref: str = typer.Option("main", "--ref", "-r", help="Source ref metadata."),
+    git_url: str | None = typer.Option(
+        None,
+        "--git-url",
+        help="Clone source into deploy.source_base_path/<domain> when local source is missing.",
+    ),
     deploy: bool = typer.Option(True, "--deploy/--no-deploy", help="Deploy source after create."),
     profile: str | None = typer.Option(
         None,
@@ -677,6 +751,13 @@ def create_site(
         if source is not None
         else (Path(app_ctx.config.deploy.source_base_path) / domain).resolve()
     )
+    source_prepare = _source_prepare_plan(
+        source_path=source_path,
+        git_url=git_url,
+        ref=ref,
+        site_profile=site_profile,
+        composer_binary=app_ctx.config.deploy.composer_binary,
+    )
     paths = get_app_paths(
         Path(app_ctx.config.deploy.releases_path),
         Path(app_ctx.config.state_path),
@@ -702,8 +783,10 @@ def create_site(
         f"Create site plan prepared for {domain}",
         domain=domain,
         source=str(source_path),
+        source_prepare=source_prepare,
         profile=site_profile,
         ref=ref,
+        git_url=git_url,
         deploy=deploy,
         runtime=runtime_plan,
         php=php_runtime,
@@ -730,6 +813,7 @@ def create_site(
         message="Create site started.",
         metadata={
             "ref": ref,
+            "source_prepare": source_prepare,
             "deploy": deploy,
             "runtime": runtime_plan,
         },
@@ -743,6 +827,7 @@ def create_site(
     ssl_result: dict | None = None
     try:
         with CommandLock(_lock_name(domain)):
+            _prepare_source(plan=source_prepare)
             metadata_payload = {
                 "domain": domain,
                 "php": php_runtime,
