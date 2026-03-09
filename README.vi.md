@@ -134,11 +134,11 @@ Development:
 
 ## Cài đặt nhanh
 
-Cài bản pin version:
+Cài nhanh:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
-  sudo LAROPS_VERSION=0.1.0 bash
+  sudo bash
 ```
 
 Bootstrap host và tạo site đầu tiên:
@@ -147,6 +147,15 @@ Bootstrap host và tạo site đầu tiên:
 larops bootstrap init --apply
 larops create site example.com --apply
 ```
+
+Cài bản pin version sau khi GitHub release đã được publish:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
+  sudo LAROPS_VERSION=0.1.0 bash
+```
+
+Nếu release mặc định chưa được publish, installer sẽ tự fallback sang snapshot mới nhất từ `main` để bootstrap ban đầu.
 
 Biến thể cho VPS yếu:
 

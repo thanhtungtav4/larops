@@ -3,7 +3,16 @@
 This runbook is written for the current GA production targets.
 If you are on Debian 13 or EL9-family hosts, treat the same commands as preview/evaluation paths and validate them on a real host before standardizing them.
 
-## 1) Install pinned LarOps release
+## 1) Install LarOps
+
+Bootstrap install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
+  sudo bash
+```
+
+Pinned install after a GitHub release exists:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \

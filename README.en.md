@@ -133,7 +133,7 @@ Development requirements:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
-  sudo LAROPS_VERSION=0.1.0 bash
+  sudo bash
 larops bootstrap init --apply
 larops create site example.com --apply
 ```
@@ -145,12 +145,14 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
-Install pinned version:
+Install pinned version after a GitHub release exists:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
   sudo LAROPS_VERSION=0.1.0 bash
 ```
+
+If the default pinned version is not published yet, the installer falls back to the latest `main` snapshot for bootstrap installs.
 
 Allow unpinned latest/main explicitly (not recommended for production):
 

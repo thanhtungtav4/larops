@@ -4,7 +4,13 @@ set -euo pipefail
 LAROPS_REPO_URL="${LAROPS_REPO_URL:-https://github.com/thanhtungtav4/larops.git}"
 LAROPS_INSTALL_DIR="${LAROPS_INSTALL_DIR:-/opt/larops}"
 LAROPS_CONFIG_PATH="${LAROPS_CONFIG_PATH:-/etc/larops/larops.yaml}"
-LAROPS_VERSION="${LAROPS_VERSION:-0.1.0}"
+if [[ -z "${LAROPS_VERSION+x}" ]]; then
+  LAROPS_VERSION="0.1.0"
+  LAROPS_VERSION_DEFAULTED="true"
+else
+  LAROPS_VERSION="${LAROPS_VERSION}"
+  LAROPS_VERSION_DEFAULTED="false"
+fi
 LAROPS_RELEASE_BASE_URL="${LAROPS_RELEASE_BASE_URL:-https://github.com/thanhtungtav4/larops/releases/download}"
 LAROPS_ALLOW_UNPINNED="${LAROPS_ALLOW_UNPINNED:-false}"
 LAROPS_SKIP_CHECKSUM="${LAROPS_SKIP_CHECKSUM:-false}"
@@ -164,7 +170,20 @@ stage_from_release_asset() {
   checksum_url="${LAROPS_RELEASE_BASE_URL}/${tag}/SHA256SUMS"
 
   echo "[larops-install] Downloading release archive ${archive_name}..."
-  curl -fsSL "${archive_url}" -o "${archive_path}"
+  if ! curl -fsSL "${archive_url}" -o "${archive_path}"; then
+    if [[ "${LAROPS_VERSION_DEFAULTED}" == "true" ]]; then
+      echo "[larops-install] Default pinned release ${tag} is not published yet."
+      echo "[larops-install] Falling back to latest main source snapshot for bootstrap install."
+      rm -rf "${tmp_dir}"
+      stage_from_latest "${target_dir}"
+      return 0
+    fi
+    echo "[larops-install] Release asset not found for ${tag}: ${archive_url}"
+    echo "[larops-install] Publish the GitHub release first, or rerun with:"
+    echo "[larops-install]   LAROPS_VERSION=latest LAROPS_ALLOW_UNPINNED=true"
+    rm -rf "${tmp_dir}"
+    exit 1
+  fi
 
   if is_true "${LAROPS_SKIP_CHECKSUM}"; then
     echo "[larops-install] WARNING: checksum verification is disabled (LAROPS_SKIP_CHECKSUM=true)."

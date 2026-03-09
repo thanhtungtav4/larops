@@ -21,7 +21,7 @@ Laravel-first server operations CLI for provisioning, deployment, runtime contro
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/install.sh | \
-  sudo LAROPS_VERSION=0.1.0 bash
+  sudo bash
 larops bootstrap init --apply
 larops create site example.com --apply
 ```
