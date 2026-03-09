@@ -44,7 +44,8 @@ def test_stack_install_plan_mode_supports_php_version_override(tmp_path: Path) -
     assert result.exit_code == 0
     lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
     assert lines[0]["php_version"] == "8.4"
-    assert "php8.4-fpm" in lines[0]["commands"][1]
+    assert lines[0]["php_repo_provider"] == "ondrej"
+    assert "php8.4-fpm" in lines[0]["commands"][-1]
 
 
 def test_stack_install_json_mode_and_event_file(tmp_path: Path) -> None:

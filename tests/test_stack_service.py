@@ -55,10 +55,31 @@ def test_build_install_commands_allow_explicit_php_version_on_debian(tmp_path: P
     os_release = write_os_release(tmp_path, os_id="ubuntu", version_id="24.04")
     platform = detect_stack_platform(os_release_path=os_release)
     commands = build_install_commands(["web"], platform=platform, php_version="8.4")
+    assert commands[0] == ["apt-get", "update"]
     assert commands[1][0:3] == ["apt-get", "install", "-y"]
-    assert "php8.4-fpm" in commands[1]
-    assert "php8.4-cli" in commands[1]
-    assert "php8.3-fpm" not in commands[1]
+    assert "software-properties-common" in commands[1]
+    assert commands[2] == ["add-apt-repository", "-y", "ppa:ondrej/php"]
+    assert commands[3] == ["apt-get", "update"]
+    assert commands[4][0:3] == ["apt-get", "install", "-y"]
+    assert "php8.4-fpm" in commands[4]
+    assert "php8.4-cli" in commands[4]
+    assert "php8.3-fpm" not in commands[4]
+
+
+def test_build_install_commands_adds_sury_repo_for_debian_php_84(tmp_path: Path) -> None:
+    os_release = write_os_release(tmp_path, os_id="debian", version_id="12")
+    platform = detect_stack_platform(os_release_path=os_release)
+    commands = build_install_commands(["web"], platform=platform, php_version="8.4")
+    assert commands[0] == ["apt-get", "update"]
+    assert commands[1][0:3] == ["apt-get", "install", "-y"]
+    assert "curl" in commands[1]
+    assert commands[2][0:2] == ["curl", "-fsSLo"]
+    assert commands[3][0:2] == ["dpkg", "-i"]
+    assert commands[4][0:2] == ["bash", "-lc"]
+    assert "packages.sury.org/php/" in commands[4][2]
+    assert commands[5] == ["apt-get", "update"]
+    assert commands[6][0:3] == ["apt-get", "install", "-y"]
+    assert "php8.4-fpm" in commands[6]
 
 
 def test_build_install_commands_use_dnf_for_rocky_9_and_enable_epel_for_ops(tmp_path: Path) -> None:
@@ -107,10 +128,12 @@ def test_build_stack_plan_includes_platform_metadata(tmp_path: Path) -> None:
     assert plan.platform.label == "debian 12"
     assert plan.platform.support_level == "ga"
     assert plan.php_version is None
+    assert plan.php_repo_provider is None
 
 
 def test_build_stack_plan_carries_php_version_for_web_group(tmp_path: Path) -> None:
     os_release = write_os_release(tmp_path, os_id="debian", version_id="12")
     plan = build_stack_plan(["web"], os_release_path=os_release, php_version="8.4")
     assert plan.php_version == "8.4"
-    assert "php8.4-fpm" in plan.commands[1]
+    assert plan.php_repo_provider == "sury"
+    assert "php8.4-fpm" in plan.commands[-1]

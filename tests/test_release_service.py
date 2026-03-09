@@ -24,7 +24,7 @@ def test_build_deploy_phase_commands_adds_first_class_laravel_steps() -> None:
     )
 
     commands = build_deploy_phase_commands(config)
-    assert commands["build"][0] == "/usr/bin/composer install --no-dev --optimize-autoloader"
+    assert commands["build"][0] == "COMPOSER_ALLOW_SUPERUSER=1 /usr/bin/composer install --no-dev --optimize-autoloader"
     assert commands["build"][1:] == ["npm ci", "npm run build"]
     assert commands["pre_activate"] == ["echo pre"]
     assert commands["post_activate"][0:2] == ["echo post", "php artisan migrate --force"]
@@ -82,7 +82,7 @@ def test_resolve_build_commands_for_release_auto_adds_composer_install(tmp_path:
     config = DeployConfig()
 
     commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
-    assert commands == ["composer install --no-dev --optimize-autoloader"]
+    assert commands == ["COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader"]
 
 
 def test_resolve_build_commands_for_release_skips_when_vendor_exists(tmp_path: Path) -> None:

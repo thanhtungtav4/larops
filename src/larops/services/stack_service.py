@@ -65,6 +65,7 @@ class StackPlan:
     commands: list[list[str]]
     platform: StackPlatform
     php_version: str | None = None
+    php_repo_provider: str | None = None
 
 
 def _parse_os_release(path: Path) -> dict[str, str]:
@@ -136,6 +137,53 @@ def _debian_web_packages(php_version: str) -> list[str]:
     ]
 
 
+def _php_repo_provider_for_platform(*, platform: StackPlatform, php_version: str | None) -> str | None:
+    if platform.family != "debian":
+        return None
+    if php_version is None or php_version == "8.3":
+        return None
+    if platform.os_id == "ubuntu":
+        return "ondrej"
+    if platform.os_id == "debian":
+        return "sury"
+    return None
+
+
+def _ubuntu_php_repo_commands() -> list[list[str]]:
+    return [
+        ["apt-get", "update"],
+        ["apt-get", "install", "-y", "software-properties-common", "ca-certificates", "lsb-release", "apt-transport-https"],
+        ["add-apt-repository", "-y", "ppa:ondrej/php"],
+        ["apt-get", "update"],
+    ]
+
+
+def _debian_php_repo_commands() -> list[list[str]]:
+    return [
+        ["apt-get", "update"],
+        ["apt-get", "install", "-y", "ca-certificates", "curl", "apt-transport-https", "gnupg2", "lsb-release"],
+        ["curl", "-fsSLo", "/tmp/debsuryorg-archive-keyring.deb", "https://packages.sury.org/debsuryorg-archive-keyring.deb"],
+        ["dpkg", "-i", "/tmp/debsuryorg-archive-keyring.deb"],
+        [
+            "bash",
+            "-lc",
+            'echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ $(. /etc/os-release && echo ${VERSION_CODENAME}) main" > /etc/apt/sources.list.d/php.list',
+        ],
+        ["apt-get", "update"],
+    ]
+
+
+def php_repo_setup_commands(*, platform: StackPlatform, php_version: str | None) -> tuple[str | None, list[list[str]]]:
+    provider = _php_repo_provider_for_platform(platform=platform, php_version=php_version)
+    if provider is None:
+        return None, []
+    if provider == "ondrej":
+        return provider, _ubuntu_php_repo_commands()
+    if provider == "sury":
+        return provider, _debian_php_repo_commands()
+    raise StackServiceError(f"Unsupported PHP repo provider: {provider}")
+
+
 def _resolve_os_release_path(path: Path | None) -> Path:
     if path is not None:
         return path
@@ -178,6 +226,7 @@ def build_install_commands(
 ) -> list[list[str]]:
     normalized_php_version = _normalize_php_version(php_version)
     package_groups = package_groups_for_platform(platform)
+    php_repo_provider, php_repo_commands = php_repo_setup_commands(platform=platform, php_version=normalized_php_version)
     if "web" in groups:
         if platform.family == "debian":
             package_groups["web"] = _debian_web_packages(normalized_php_version or "8.3")
@@ -192,6 +241,8 @@ def build_install_commands(
     dedup_packages = sorted(set(packages))
 
     if platform.package_manager == "apt":
+        if php_repo_provider is not None:
+            return [*php_repo_commands, ["apt-get", "install", "-y", *dedup_packages]]
         return [["apt-get", "update"], ["apt-get", "install", "-y", *dedup_packages]]
 
     if platform.package_manager == "dnf":
@@ -215,11 +266,13 @@ def build_stack_plan(
 ) -> StackPlan:
     platform = detect_stack_platform(os_release_path=os_release_path)
     normalized_php_version = _normalize_php_version(php_version)
+    php_repo_provider, _ = php_repo_setup_commands(platform=platform, php_version=normalized_php_version)
     return StackPlan(
         groups=groups,
         commands=build_install_commands(groups, platform=platform, php_version=normalized_php_version),
         platform=platform,
         php_version=normalized_php_version if "web" in groups else None,
+        php_repo_provider=php_repo_provider if "web" in groups else None,
     )
 
 

@@ -173,6 +173,8 @@ larops bootstrap init --php 8.4 --apply
 larops create site example.com --php 8.4 --apply
 ```
 
+Khi pin PHP version khác mặc định trên Ubuntu hoặc Debian, LarOps sẽ tự chuẩn bị PHP package repository tương ứng trước khi cài `php<major.minor>-*`.
+
 Lấy source từ Git và tạo DB luôn:
 
 ```bash
@@ -189,6 +191,7 @@ larops create site example.com \
 - Nếu source còn thiếu và site hiệu lực thuộc họ Laravel, LarOps sẽ tự bootstrap source bằng `composer create-project laravel/laravel`.
 - Nếu release có `composer.json` nhưng chưa có `vendor/autoload.php`, LarOps sẽ tự chạy `composer install` ở build phase.
 - Nên dùng cùng giá trị `--php` ở bước bootstrap host và create site để Nginx/FPM khớp đúng runtime đã cài.
+- Trên Ubuntu và Debian, LarOps sẽ tự chuẩn bị external PHP repository tương ứng khi version pin mới hơn mặc định của distro.
 - Nếu có `--with-db`, LarOps sẽ provision database/user của ứng dụng và ghi credential/password file trước khi deploy.
 - Khi source được deploy có file `artisan`, `create site` còn tự chạy bootstrap app sau deploy:
   - `php artisan key:generate --force` chỉ khi `APP_KEY` còn thiếu

@@ -154,6 +154,8 @@ larops bootstrap init --php 8.4 --apply
 larops create site example.com --php 8.4 --apply
 ```
 
+When you pin a non-default PHP version on Ubuntu or Debian, LarOps now prepares the matching PHP package repository automatically before installing `php<major.minor>-*` packages.
+
 Git source plus DB bootstrap:
 
 ```bash
@@ -170,6 +172,7 @@ What `create site` does on a fresh host:
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - Use the same `--php` value on host bootstrap and site create so Nginx/FPM matches the installed PHP runtime.
+- On Ubuntu and Debian, LarOps auto-prepares the matching external PHP repository when the pinned version is newer than the distro default.
 - If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
 - When the deployed source contains `artisan`, `create site` also auto-runs the first app bootstrap after deploy:
   - `php artisan key:generate --force` only when `APP_KEY` is missing

@@ -284,7 +284,8 @@ Meaning:
 
 - The application `composer.lock` was generated for a newer PHP version than the host runtime.
 - LarOps can pin the Debian-family web stack with `--php`, but it cannot make an incompatible lock file work on an older host.
-- Package availability for `php<major.minor>-*` still depends on the host apt sources. LarOps does not add third-party PHP repositories automatically.
+- On Ubuntu and Debian, LarOps now prepares the matching external PHP package repository automatically when you pin a newer PHP version.
+- The lock file still has to match the PHP version you actually deploy.
 
 Fix:
 

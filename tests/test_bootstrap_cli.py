@@ -66,7 +66,8 @@ def test_bootstrap_plan_includes_php_version_override_for_web_stack(tmp_path: Pa
     assert result.exit_code == 0
     payload = json.loads(result.stdout.strip().splitlines()[0])
     assert payload["php_version"] == "8.4"
-    assert "php8.4-fpm" in payload["stack_commands"][1]
+    assert payload["php_repo_provider"] == "ondrej"
+    assert "php8.4-fpm" in payload["stack_commands"][-1]
 
 
 def test_bootstrap_small_vps_profile_allows_explicit_no_data_override(tmp_path: Path) -> None:

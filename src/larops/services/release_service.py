@@ -88,7 +88,7 @@ def _composer_install_command(config: DeployConfig) -> str:
         flags.append("--no-dev")
     if config.composer_optimize_autoloader:
         flags.append("--optimize-autoloader")
-    return " ".join([config.composer_binary, *flags])
+    return " ".join(["COMPOSER_ALLOW_SUPERUSER=1", config.composer_binary, *flags])
 
 
 def resolve_build_commands_for_release(*, config: DeployConfig, release_dir: Path, commands: list[str]) -> list[str]:

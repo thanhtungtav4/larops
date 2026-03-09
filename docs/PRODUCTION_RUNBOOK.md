@@ -41,6 +41,7 @@ Notes:
 
 - The current `web` stack installs `nginx`, `certbot`, PHP-FPM, and core PHP extensions.
 - On Debian-family hosts, `bootstrap init --php <major.minor>` and `stack install --web --php <major.minor>` pin the installed PHP packages. Use the same value again on `create site --php ...`.
+- When the pinned version is newer than the distro default, LarOps prepares the matching external PHP package repository automatically during stack install.
 - If this host was bootstrapped with an older LarOps build before `certbot` was added to the default web stack, repair it with:
 
 ```bash
