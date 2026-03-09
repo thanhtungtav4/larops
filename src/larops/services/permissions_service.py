@@ -47,6 +47,19 @@ def _resolve_owner_group(owner: str | None, group: str | None) -> tuple[int | No
     return uid, gid
 
 
+def _resolve_owner_group_best_effort(owner: str | None, group: str | None) -> tuple[int | None, int | None]:
+    if (owner is None) != (group is None):
+        raise PermissionServiceError("Use --owner and --group together, or omit both.")
+    if owner is None or group is None:
+        return None, None
+    try:
+        uid = pwd.getpwnam(owner).pw_uid
+        gid = grp.getgrnam(group).gr_gid
+    except KeyError:
+        return None, None
+    return uid, gid
+
+
 def _apply_owner(path: Path, uid: int | None, gid: int | None) -> bool:
     if uid is None or gid is None:
         return False
@@ -129,4 +142,39 @@ def reassign_site_permissions(
         "changed_mode_count": changed_mode,
         "changed_owner_count": changed_owner,
         "changed_writable_count": writable_changed,
+    }
+
+
+def ensure_site_writable_permissions(
+    *,
+    base_releases_path: Path,
+    state_path: Path,
+    domain: str,
+    owner: str | None,
+    group: str | None,
+    writable_mode_raw: str = "775",
+) -> dict[str, Any]:
+    ensure_app_registered(base_releases_path, state_path, domain)
+    app_paths = get_app_paths(base_releases_path, state_path, domain)
+    current_path = app_paths.current.resolve(strict=False) if app_paths.current.exists() else app_paths.current
+    writable_mode = _parse_mode(writable_mode_raw, "writable mode")
+    uid, gid = _resolve_owner_group_best_effort(owner, group)
+    targets = [path for path in _resolve_default_writable_paths(app_paths.root, current_path) if path.exists()]
+
+    changed_mode = 0
+    changed_owner = 0
+    for target in targets:
+        for path in _iter_tree(target):
+            changed_owner += int(_apply_owner(path, uid, gid))
+            changed_mode += int(_set_mode(path, writable_mode))
+
+    return {
+        "domain": domain,
+        "writable_paths": [str(path) for path in targets],
+        "owner": owner,
+        "group": group,
+        "owner_group_applied": uid is not None and gid is not None,
+        "writable_mode": oct(writable_mode),
+        "changed_mode_count": changed_mode,
+        "changed_owner_count": changed_owner,
     }

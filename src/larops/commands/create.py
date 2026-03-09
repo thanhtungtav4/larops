@@ -30,6 +30,7 @@ from larops.services.nginx_site_service import (
     capture_nginx_site_snapshot,
     restore_nginx_site_snapshot,
 )
+from larops.services.permissions_service import ensure_site_writable_permissions
 from larops.services.env_file_service import (
     EnvFileServiceError,
     database_env_updates,
@@ -134,6 +135,7 @@ def _emit_create_site_summary(
     db_result: dict | None,
     env_sync_result: dict | None,
     bootstrap_reports: list[dict[str, Any]],
+    permissions_result: dict[str, Any] | None,
 ) -> None:
     if app_ctx.json_output:
         return
@@ -171,6 +173,9 @@ def _emit_create_site_summary(
         )
     if env_sync_result is not None:
         lines.append(f"  env file: {env_sync_result['env_file']}")
+    if permissions_result is not None:
+        owner_group = "applied" if permissions_result.get("owner_group_applied") else "skipped"
+        lines.append(f"  writable permissions: {permissions_result['writable_mode']} ({owner_group})")
     if bootstrap_reports:
         lines.append("  app bootstrap: completed")
     for line in lines:
@@ -1105,6 +1110,7 @@ def create_site(
     release_id: str | None = None
     deleted_releases: list[str] = []
     runtime_results: dict[str, dict] = {}
+    permissions_result: dict[str, Any] | None = None
     rollback_steps: list[dict[str, str]] = []
     snapshot = _capture_atomic_snapshot(paths=paths, state_path=Path(app_ctx.config.state_path)) if atomic else None
     nginx_snapshot = capture_nginx_site_snapshot(domain) if atomic and deploy and nginx_enabled else None
@@ -1238,6 +1244,13 @@ def create_site(
                 )
                 activate_release(paths, release_dir)
                 current_path = paths.current.resolve(strict=True)
+                permissions_result = ensure_site_writable_permissions(
+                    base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                    state_path=Path(app_ctx.config.state_path),
+                    domain=domain,
+                    owner=app_ctx.config.systemd.user,
+                    group=app_ctx.config.systemd.user,
+                )
                 post_activate_reports = run_release_commands(
                     workdir=current_path,
                     phase="post-activate",
@@ -1439,4 +1452,5 @@ def create_site(
         db_result=db_result,
         env_sync_result=env_sync_result,
         bootstrap_reports=bootstrap_reports,
+        permissions_result=permissions_result,
     )
