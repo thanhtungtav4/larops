@@ -49,6 +49,8 @@ def test_build_install_commands_use_platform_package_manager(tmp_path: Path) -> 
     assert "nginx" in commands[1]
     assert "ufw" in commands[1]
     assert "php8.3-fpm" in commands[1]
+    assert "php8.3-mysql" in commands[1]
+    assert "php8.3-pgsql" in commands[1]
 
 
 def test_build_install_commands_allow_explicit_php_version_on_debian(tmp_path: Path) -> None:
@@ -63,6 +65,8 @@ def test_build_install_commands_allow_explicit_php_version_on_debian(tmp_path: P
     assert commands[4][0:3] == ["apt-get", "install", "-y"]
     assert "php8.4-fpm" in commands[4]
     assert "php8.4-cli" in commands[4]
+    assert "php8.4-mysql" in commands[4]
+    assert "php8.4-pgsql" in commands[4]
     assert "php8.3-fpm" not in commands[4]
 
 
@@ -80,6 +84,8 @@ def test_build_install_commands_adds_sury_repo_for_debian_php_84(tmp_path: Path)
     assert commands[5] == ["apt-get", "update"]
     assert commands[6][0:3] == ["apt-get", "install", "-y"]
     assert "php8.4-fpm" in commands[6]
+    assert "php8.4-mysql" in commands[6]
+    assert "php8.4-pgsql" in commands[6]
 
 
 def test_build_install_commands_use_dnf_for_rocky_9_and_enable_epel_for_ops(tmp_path: Path) -> None:
@@ -94,6 +100,8 @@ def test_build_install_commands_use_dnf_for_rocky_9_and_enable_epel_for_ops(tmp_
     assert "nginx" in commands[3]
     assert "firewalld" in commands[3]
     assert "fail2ban" in commands[3]
+    assert "php-mysqlnd" in commands[3]
+    assert "php-pgsql" in commands[3]
 
 
 def test_build_install_commands_reject_explicit_php_version_on_el9(tmp_path: Path) -> None:

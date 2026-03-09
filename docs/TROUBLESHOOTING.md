@@ -334,6 +334,34 @@ larops bootstrap init --php 8.4 --apply
 larops create site example.com --php 8.4 --force --apply
 ```
 
+## Laravel bootstrap fails with `could not find driver`
+
+Symptom:
+
+```text
+could not find driver
+```
+
+Meaning:
+
+- PHP is installed, but the runtime is missing the DB extension needed by the app during bootstrap, usually `pdo_mysql` or `pdo_pgsql`.
+- Current LarOps includes the common PHP DB drivers in the `web` stack by default.
+
+Fix:
+
+- Update LarOps on the host.
+- Re-run the web stack install with the same PHP version you plan to use:
+
+```bash
+larops stack install --web --php 8.4 --apply
+```
+
+- Then recreate or redeploy the site:
+
+```bash
+larops create site example.com --php 8.4 --force --apply
+```
+
 ## `ssl issue` fails because `certbot` is missing
 
 Symptom:
