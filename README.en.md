@@ -147,6 +147,13 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+Pin the host web stack to another PHP version on Debian-family hosts:
+
+```bash
+larops bootstrap init --php 8.4 --apply
+larops create site example.com --php 8.4 --apply
+```
+
 Git source plus DB bootstrap:
 
 ```bash
@@ -162,6 +169,7 @@ What `create site` does on a fresh host:
 - If the source directory is missing and `--git-url` is provided, LarOps clones the repository into `deploy.source_base_path/<domain>` first.
 - If the source directory is missing and the effective site is Laravel-family, LarOps bootstraps the source with `composer create-project laravel/laravel`.
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
+- Use the same `--php` value on host bootstrap and site create so Nginx/FPM matches the installed PHP runtime.
 - If `--with-db` is set, LarOps provisions the application DB/user and writes the app credential/password files before deploy.
 - When the deployed source contains `artisan`, `create site` also auto-runs the first app bootstrap after deploy:
   - `php artisan key:generate --force` only when `APP_KEY` is missing

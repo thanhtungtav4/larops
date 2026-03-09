@@ -236,6 +236,7 @@ def _relabel_managed_etc_paths(paths: list[Path]) -> None:
 def init(
     ctx: typer.Context,
     profile: str = typer.Option("default", "--profile", help="Bootstrap profile: default|small-vps."),
+    php: str | None = typer.Option(None, "--php", help="PHP runtime version for the web stack, for example 8.3 or 8.4."),
     web: bool | None = typer.Option(None, "--web/--no-web", help="Install web stack group."),
     data: bool | None = typer.Option(None, "--data/--no-data", help="Install data stack group."),
     postgres: bool | None = typer.Option(None, "--postgres/--no-postgres", help="Install PostgreSQL stack group."),
@@ -268,7 +269,7 @@ def init(
     effective_ops = default_groups["ops"] if ops is None else ops
     requested_groups = [] if skip_stack else resolve_groups(effective_web, effective_data, effective_postgres, effective_ops)
     try:
-        stack_plan = build_stack_plan(requested_groups) if requested_groups else None
+        stack_plan = build_stack_plan(requested_groups, php_version=php) if requested_groups else None
     except StackServiceError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
@@ -294,6 +295,7 @@ def init(
                 "write_config": write_config,
                 "config_path": str(config_path),
                 "domain": domain,
+                "php_version": stack_plan.php_version if stack_plan else php,
                 "apply": apply,
                 "dry_run": app_ctx.dry_run,
             },
@@ -310,6 +312,7 @@ def init(
         group_defaults=default_groups,
         stack_platform=stack_plan.platform.label if stack_plan else None,
         stack_platform_support=stack_plan.platform.support_level if stack_plan else None,
+        php_version=stack_plan.php_version if stack_plan else php,
         stack_commands=stack_plan.commands if stack_plan else [],
         app_plan=app_plan,
         apply=apply,
@@ -339,9 +342,10 @@ def init(
                     domain,
                 )
                 phase_commands = build_deploy_phase_commands(app_ctx.config.deploy)
+                bootstrap_php = stack_plan.php_version if stack_plan is not None and stack_plan.php_version else (php or "8.3")
                 payload = {
                     "domain": domain,
-                    "php": "8.3",
+                    "php": bootstrap_php,
                     "db": "mysql",
                     "ssl": False,
                     "created_at": datetime.now(UTC).isoformat(),

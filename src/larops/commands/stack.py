@@ -17,6 +17,7 @@ def install(
     data: bool = typer.Option(False, "--data", help="Install data components."),
     postgres: bool = typer.Option(False, "--postgres", help="Install PostgreSQL components."),
     ops: bool = typer.Option(False, "--ops", help="Install operations components."),
+    php: str | None = typer.Option(None, "--php", help="PHP runtime version for the web stack, for example 8.3 or 8.4."),
     apply: bool = typer.Option(
         False,
         "--apply",
@@ -31,7 +32,7 @@ def install(
         raise typer.Exit(code=2)
 
     try:
-        plan = build_stack_plan(requested)
+        plan = build_stack_plan(requested, php_version=php)
     except StackServiceError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
@@ -45,6 +46,7 @@ def install(
                 "groups": requested,
                 "platform": plan.platform.label,
                 "support_level": plan.platform.support_level,
+                "php_version": plan.php_version,
                 "apply": apply,
                 "dry_run": app_ctx.dry_run,
             },
@@ -57,6 +59,7 @@ def install(
         groups=requested,
         platform=plan.platform.label,
         support_level=plan.platform.support_level,
+        php_version=plan.php_version,
         commands=plan.commands,
         apply=apply,
         dry_run=app_ctx.dry_run,

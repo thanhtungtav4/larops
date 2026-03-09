@@ -39,6 +39,14 @@ def test_stack_install_plan_mode(tmp_path: Path) -> None:
     assert "Plan mode finished. Use --apply to execute changes." in result.stdout
 
 
+def test_stack_install_plan_mode_supports_php_version_override(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--json", "stack", "install", "--web", "--php", "8.4"], env=linux_env(tmp_path))
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert lines[0]["php_version"] == "8.4"
+    assert "php8.4-fpm" in lines[0]["commands"][1]
+
+
 def test_stack_install_json_mode_and_event_file(tmp_path: Path) -> None:
     events = tmp_path / "events.jsonl"
     env = linux_env(tmp_path)

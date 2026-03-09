@@ -25,15 +25,22 @@ curl -fsSL https://raw.githubusercontent.com/thanhtungtav4/larops/main/scripts/i
 sudo larops bootstrap init --apply
 ```
 
-For a weak VPS that should avoid local DB/Redis by default:
+For a weak single-node VPS:
 
 ```bash
 sudo larops bootstrap init --profile small-vps --apply
 ```
 
+To pin a different PHP version on a Debian-family host:
+
+```bash
+sudo larops bootstrap init --php 8.4 --apply
+```
+
 Notes:
 
 - The current `web` stack installs `nginx`, `certbot`, PHP-FPM, and core PHP extensions.
+- On Debian-family hosts, `bootstrap init --php <major.minor>` and `stack install --web --php <major.minor>` pin the installed PHP packages. Use the same value again on `create site --php ...`.
 - If this host was bootstrapped with an older LarOps build before `certbot` was added to the default web stack, repair it with:
 
 ```bash

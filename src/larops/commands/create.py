@@ -127,6 +127,7 @@ def _emit_create_site_summary(
     paths: Any,
     deploy: bool,
     release_id: str | None,
+    php_runtime: str,
     runtime_results: dict[str, dict],
     ssl_result: dict | None,
     nginx_result: dict | None,
@@ -140,6 +141,7 @@ def _emit_create_site_summary(
     lines = [
         f"  app root: {paths.root}",
         f"  metadata: {paths.metadata}",
+        f"  php: {php_runtime}",
     ]
     if deploy and release_id:
         lines.extend(
@@ -1306,6 +1308,7 @@ def create_site(
         paths=paths,
         deploy=deploy,
         release_id=release_id,
+        php_runtime=php_runtime,
         runtime_results=runtime_results,
         ssl_result=ssl_result,
         nginx_result=nginx_result,

@@ -48,6 +48,17 @@ def test_build_install_commands_use_platform_package_manager(tmp_path: Path) -> 
     assert "certbot" in commands[1]
     assert "nginx" in commands[1]
     assert "ufw" in commands[1]
+    assert "php8.3-fpm" in commands[1]
+
+
+def test_build_install_commands_allow_explicit_php_version_on_debian(tmp_path: Path) -> None:
+    os_release = write_os_release(tmp_path, os_id="ubuntu", version_id="24.04")
+    platform = detect_stack_platform(os_release_path=os_release)
+    commands = build_install_commands(["web"], platform=platform, php_version="8.4")
+    assert commands[1][0:3] == ["apt-get", "install", "-y"]
+    assert "php8.4-fpm" in commands[1]
+    assert "php8.4-cli" in commands[1]
+    assert "php8.3-fpm" not in commands[1]
 
 
 def test_build_install_commands_use_dnf_for_rocky_9_and_enable_epel_for_ops(tmp_path: Path) -> None:
@@ -62,6 +73,13 @@ def test_build_install_commands_use_dnf_for_rocky_9_and_enable_epel_for_ops(tmp_
     assert "nginx" in commands[3]
     assert "firewalld" in commands[3]
     assert "fail2ban" in commands[3]
+
+
+def test_build_install_commands_reject_explicit_php_version_on_el9(tmp_path: Path) -> None:
+    os_release = write_os_release(tmp_path, os_id="rocky", version_id="9.4")
+    platform = detect_stack_platform(os_release_path=os_release)
+    with pytest.raises(StackServiceError, match="Explicit PHP version pinning is not supported"):
+        build_install_commands(["web"], platform=platform, php_version="8.4")
 
 
 def test_detect_stack_platform_supports_rhel_9_as_experimental(tmp_path: Path) -> None:
@@ -88,3 +106,11 @@ def test_build_stack_plan_includes_platform_metadata(tmp_path: Path) -> None:
     plan = build_stack_plan(["web"], os_release_path=os_release)
     assert plan.platform.label == "debian 12"
     assert plan.platform.support_level == "ga"
+    assert plan.php_version is None
+
+
+def test_build_stack_plan_carries_php_version_for_web_group(tmp_path: Path) -> None:
+    os_release = write_os_release(tmp_path, os_id="debian", version_id="12")
+    plan = build_stack_plan(["web"], os_release_path=os_release, php_version="8.4")
+    assert plan.php_version == "8.4"
+    assert "php8.4-fpm" in plan.commands[1]

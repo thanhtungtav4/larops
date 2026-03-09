@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 from typing import Iterable
 
 from larops.core.shell import run_command
@@ -13,17 +14,6 @@ class StackServiceError(RuntimeError):
 
 
 DEBIAN_PACKAGE_GROUPS = {
-    "web": [
-        "nginx",
-        "certbot",
-        "composer",
-        "php8.3-fpm",
-        "php8.3-cli",
-        "php8.3-mbstring",
-        "php8.3-xml",
-        "php8.3-curl",
-        "php8.3-zip",
-    ],
     "data": ["mariadb-server", "redis-server"],
     "postgres": ["postgresql"],
     "ops": ["fail2ban", "ufw"],
@@ -74,6 +64,7 @@ class StackPlan:
     groups: list[str]
     commands: list[list[str]]
     platform: StackPlatform
+    php_version: str | None = None
 
 
 def _parse_os_release(path: Path) -> dict[str, str]:
@@ -109,7 +100,7 @@ def _supported_platform_summary() -> str:
 
 def package_groups_for_platform(platform: StackPlatform) -> dict[str, list[str]]:
     if platform.family == "debian":
-        return DEBIAN_PACKAGE_GROUPS
+        return {key: list(value) for key, value in DEBIAN_PACKAGE_GROUPS.items()}
     if platform.family == "el9":
         groups = {key: list(value) for key, value in EL9_COMMON_PACKAGE_GROUPS.items()}
         if platform.os_id in {"rocky", "almalinux", "rhel"}:
@@ -118,6 +109,31 @@ def package_groups_for_platform(platform: StackPlatform) -> dict[str, list[str]]
             groups["ops"] = ["firewalld"]
         return groups
     raise StackServiceError(f"Unsupported platform family: {platform.family}")
+
+
+def _normalize_php_version(php_version: str | None) -> str | None:
+    if php_version is None:
+        return None
+    normalized = php_version.strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"\d+\.\d+", normalized):
+        raise StackServiceError(f"Unsupported PHP version format: {php_version}. Use major.minor, for example 8.3.")
+    return normalized
+
+
+def _debian_web_packages(php_version: str) -> list[str]:
+    return [
+        "nginx",
+        "certbot",
+        "composer",
+        f"php{php_version}-fpm",
+        f"php{php_version}-cli",
+        f"php{php_version}-mbstring",
+        f"php{php_version}-xml",
+        f"php{php_version}-curl",
+        f"php{php_version}-zip",
+    ]
 
 
 def _resolve_os_release_path(path: Path | None) -> Path:
@@ -154,8 +170,22 @@ def resolve_groups(web: bool, data: bool, postgres: bool, ops: bool) -> list[str
     return [name for name, enabled in {"web": web, "data": data, "postgres": postgres, "ops": ops}.items() if enabled]
 
 
-def build_install_commands(groups: Iterable[str], *, platform: StackPlatform) -> list[list[str]]:
+def build_install_commands(
+    groups: Iterable[str],
+    *,
+    platform: StackPlatform,
+    php_version: str | None = None,
+) -> list[list[str]]:
+    normalized_php_version = _normalize_php_version(php_version)
     package_groups = package_groups_for_platform(platform)
+    if "web" in groups:
+        if platform.family == "debian":
+            package_groups["web"] = _debian_web_packages(normalized_php_version or "8.3")
+        elif normalized_php_version is not None:
+            raise StackServiceError(
+                f"Explicit PHP version pinning is not supported on {platform.label}. "
+                "Use the distro default PHP stream on this preview platform."
+            )
     packages: list[str] = []
     for group in groups:
         packages.extend(package_groups[group])
@@ -177,9 +207,20 @@ def build_install_commands(groups: Iterable[str], *, platform: StackPlatform) ->
     raise StackServiceError(f"Unsupported package manager for stack install: {platform.package_manager}")
 
 
-def build_stack_plan(groups: list[str], *, os_release_path: Path | None = None) -> StackPlan:
+def build_stack_plan(
+    groups: list[str],
+    *,
+    os_release_path: Path | None = None,
+    php_version: str | None = None,
+) -> StackPlan:
     platform = detect_stack_platform(os_release_path=os_release_path)
-    return StackPlan(groups=groups, commands=build_install_commands(groups, platform=platform), platform=platform)
+    normalized_php_version = _normalize_php_version(php_version)
+    return StackPlan(
+        groups=groups,
+        commands=build_install_commands(groups, platform=platform, php_version=normalized_php_version),
+        platform=platform,
+        php_version=normalized_php_version if "web" in groups else None,
+    )
 
 
 def apply_stack_plan(plan: StackPlan) -> None:

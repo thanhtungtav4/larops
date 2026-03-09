@@ -271,6 +271,33 @@ Manual artisan commands are still useful when:
 - you intentionally disabled or bypassed the normal create flow
 - your app requires additional project-specific setup commands
 
+## `composer install` fails because the lock file requires a newer PHP version
+
+Symptom:
+
+```text
+Your lock file does not contain a compatible set of packages.
+... requires php >=8.4
+```
+
+Meaning:
+
+- The application `composer.lock` was generated for a newer PHP version than the host runtime.
+- LarOps can pin the Debian-family web stack with `--php`, but it cannot make an incompatible lock file work on an older host.
+- Package availability for `php<major.minor>-*` still depends on the host apt sources. LarOps does not add third-party PHP repositories automatically.
+
+Fix:
+
+1. Either regenerate `composer.lock` for the PHP version you actually deploy.
+2. Or rebuild the host web stack with the matching PHP version and recreate or redeploy the site.
+
+Example:
+
+```bash
+larops bootstrap init --php 8.4 --apply
+larops create site example.com --php 8.4 --force --apply
+```
+
 ## `ssl issue` fails because `certbot` is missing
 
 Symptom:
