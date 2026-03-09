@@ -32,6 +32,7 @@ from larops.services.release_service import (
     run_release_commands,
     write_release_manifest,
 )
+from larops.services.permissions_service import ensure_site_writable_permissions
 from larops.services.selinux_service import SelinuxServiceError, relabel_managed_paths_for_selinux
 from larops.services.stack_service import StackServiceError, apply_stack_plan, build_stack_plan, resolve_groups
 
@@ -384,6 +385,13 @@ def init(
                 )
                 activate_release(paths, release_dir)
                 current_path = paths.current.resolve(strict=True)
+                permissions_result = ensure_site_writable_permissions(
+                    base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                    state_path=Path(app_ctx.config.state_path),
+                    domain=domain,
+                    owner=app_ctx.config.systemd.user,
+                    group=app_ctx.config.systemd.user,
+                )
                 post_activate_reports = run_release_commands(
                     workdir=current_path,
                     phase="post-activate",
@@ -423,6 +431,7 @@ def init(
                     "post_activate_reports": post_activate_reports,
                     "verify_reports": verify_reports,
                     "health_check": health_check,
+                    "permissions": permissions_result,
                 }
                 save_metadata(paths.metadata, metadata)
                 write_release_manifest(

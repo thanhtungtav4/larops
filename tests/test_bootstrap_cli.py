@@ -114,6 +114,8 @@ def test_bootstrap_apply_with_domain_and_skip_stack(tmp_path: Path) -> None:
     assert info.exit_code == 0
     payload = json.loads(info.stdout.strip())
     assert payload["releases_count"] == 1
+    metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
+    assert metadata["last_deploy"]["permissions"]["writable_mode"] == "0o775"
 
 
 def test_bootstrap_write_config_does_not_materialize_telegram_secrets(tmp_path: Path) -> None:

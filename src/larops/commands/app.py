@@ -23,6 +23,7 @@ from larops.services.app_lifecycle import (
     rollback_release,
     save_metadata,
 )
+from larops.services.permissions_service import ensure_site_writable_permissions
 from larops.services.nginx_site_service import resolve_nginx_site_paths
 from larops.services.release_service import (
     ReleaseServiceError,
@@ -320,6 +321,7 @@ def deploy(
 
     release_id: str | None = None
     release_dir: Path | None = None
+    permissions_result: dict | None = None
     try:
         with CommandLock(_lock_name(domain)):
             metadata = load_metadata(paths.metadata)
@@ -351,6 +353,13 @@ def deploy(
             )
             activate_release(paths, release_dir)
             current_path = paths.current.resolve(strict=True)
+            permissions_result = ensure_site_writable_permissions(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                state_path=Path(app_ctx.config.state_path),
+                domain=domain,
+                owner=app_ctx.config.systemd.user,
+                group=app_ctx.config.systemd.user,
+            )
             post_activate_reports = run_release_commands(
                 workdir=current_path,
                 phase="post-activate",
@@ -417,6 +426,7 @@ def deploy(
                 "verify_reports": verify_reports,
                 "health_check": health_check,
                 "runtime_refresh": runtime_refresh,
+                "permissions": permissions_result,
             }
             save_metadata(paths.metadata, metadata)
             write_release_manifest(

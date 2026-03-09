@@ -191,6 +191,23 @@ def test_deploy_uses_shared_env_and_storage(tmp_path: Path) -> None:
     assert (current / "storage" / "user-upload.txt").read_text(encoding="utf-8") == "persist"
 
 
+def test_deploy_records_writable_permissions_metadata(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "src-one", "release-one")
+
+    create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+
+    deploy = runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source), "--apply"],
+    )
+    assert deploy.exit_code == 0
+
+    metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
+    assert metadata["last_deploy"]["permissions"]["writable_mode"] == "0o775"
+
+
 def test_deploy_rolls_back_on_health_check_failure(tmp_path: Path, monkeypatch) -> None:
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(
