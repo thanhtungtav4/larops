@@ -131,6 +131,7 @@ When `larops create site <domain>` runs:
 8. If the deployed source contains `artisan`, `create site` defaults to `--app-bootstrap-mode auto`:
    - write `APP_KEY` directly into `shared/.env` when missing
    - run `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema
+   - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
    - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` to skip Laravel bootstrap on first create
 9. If a previous failed create already wrote app metadata, rerun with `--force`.
 

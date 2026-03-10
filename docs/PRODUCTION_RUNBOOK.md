@@ -248,6 +248,7 @@ Source preparation rules:
 - When the deployed source contains `artisan`, `create site` defaults to `--app-bootstrap-mode auto`:
   - it writes `APP_KEY` directly into `shared/.env` when missing
   - it only runs `migrate`, `package:discover`, and `optimize*` when the app database already appears to have schema
+  - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
   - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` on fresh apps whose providers read DB-backed settings during boot
 - Practical rule:
   - `auto`: default, safest general case

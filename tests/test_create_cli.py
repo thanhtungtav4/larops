@@ -266,7 +266,7 @@ def test_create_site_apply_bootstraps_laravel_artisan_after_deploy(tmp_path: Pat
 
     result = runner.invoke(
         app,
-        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+        ["--config", str(config), "create", "site", "demo.test", "--app-bootstrap-mode", "eager", "--apply"],
     )
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"]
@@ -292,7 +292,7 @@ def test_create_site_apply_skips_key_generate_when_app_key_exists(tmp_path: Path
 
     result = runner.invoke(
         app,
-        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+        ["--config", str(config), "create", "site", "demo.test", "--app-bootstrap-mode", "eager", "--apply"],
     )
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
@@ -321,7 +321,7 @@ def test_create_site_apply_runs_bootstrap_before_post_activate_when_cache_warm_e
 
     result = runner.invoke(
         app,
-        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+        ["--config", str(config), "create", "site", "demo.test", "--app-bootstrap-mode", "eager", "--apply"],
     )
     assert result.exit_code == 0
     phases = [phase for phase, _commands in phase_calls]
@@ -366,7 +366,7 @@ def test_create_site_apply_dedupes_framework_post_activate_work_but_keeps_custom
 
     result = runner.invoke(
         app,
-        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+        ["--config", str(config), "create", "site", "demo.test", "--app-bootstrap-mode", "eager", "--apply"],
     )
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
@@ -398,6 +398,45 @@ def test_resolve_app_bootstrap_strategy_auto_skips_when_database_is_empty(monkey
     assert strategy["mode"] == "skip"
     assert strategy["reason"] == "database-empty"
     assert strategy["table_count"] == 0
+
+
+def test_resolve_app_bootstrap_strategy_auto_skips_without_database_context(tmp_path: Path) -> None:
+    current_path = tmp_path / "current"
+    current_path.mkdir(parents=True, exist_ok=True)
+    (current_path / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+
+    strategy = _resolve_app_bootstrap_strategy(
+        requested_mode="auto",
+        current_path=current_path,
+        database_provision=None,
+    )
+
+    assert strategy["mode"] == "skip"
+    assert strategy["reason"] == "no-db-context"
+    assert strategy["table_count"] is None
+
+
+def test_create_site_apply_auto_mode_skips_bootstrap_without_database_context(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--apply"],
+    )
+
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    assert bootstrap == []
+    assert "APP_KEY=" in (tmp_path / "apps" / "demo.test" / "shared" / ".env").read_text(encoding="utf-8")
+    assert "app bootstrap: skipped (no-db-context)" in result.stdout
 
 
 def test_resolve_app_bootstrap_strategy_auto_eager_when_database_has_tables(monkeypatch, tmp_path: Path) -> None:

@@ -183,6 +183,7 @@ What `create site` does on a fresh host:
 - When the deployed source contains `artisan`, `create site` defaults to `--app-bootstrap-mode auto`:
   - it writes `APP_KEY` directly into `shared/.env` when missing
   - it only runs `migrate`, `package:discover`, and `optimize*` if the app database already appears to have schema
+  - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
   - use `--app-bootstrap-mode eager` for apps known to boot safely on first create
   - use `--app-bootstrap-mode skip` when provider boot depends on schema or seeded settings
 - `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.

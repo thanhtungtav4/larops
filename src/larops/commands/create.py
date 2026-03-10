@@ -231,7 +231,7 @@ def _resolve_app_bootstrap_strategy(
     if mode in {"eager", "skip"}:
         return {"mode": mode, "reason": f"explicit-{mode}", "table_count": None}
     if database_provision is None:
-        return {"mode": "eager", "reason": "no-db-context", "table_count": None}
+        return {"mode": "skip", "reason": "no-db-context", "table_count": None}
 
     credential_file_raw = str(database_provision.get("credential_file", "")).strip()
     database = str(database_provision.get("database", "")).strip()

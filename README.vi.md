@@ -202,6 +202,7 @@ larops create site example.com \
 - Khi source được deploy có file `artisan`, `create site` mặc định dùng `--app-bootstrap-mode auto`:
   - tự ghi `APP_KEY` trực tiếp vào `shared/.env` nếu còn thiếu
   - chỉ chạy `migrate`, `package:discover`, và `optimize*` khi database của app có vẻ đã có schema
+  - nếu LarOps không xác định được DB context an toàn, nó sẽ bỏ bootstrap Laravel thay vì ép chạy artisan ở lần create đầu
   - dùng `--app-bootstrap-mode eager` cho app bạn biết chắc boot an toàn ngay từ lần create đầu
   - dùng `--app-bootstrap-mode skip` nếu provider boot phụ thuộc schema hoặc dữ liệu seed ban đầu
 - `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
