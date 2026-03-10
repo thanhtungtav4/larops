@@ -130,17 +130,26 @@ def test_app_info_non_json_prints_operator_summary(tmp_path: Path, monkeypatch) 
         "env_file": "/var/www/demo.test/shared/.env",
         "updated_keys": ["DB_CONNECTION", "DB_HOST"],
     }
+    payload["last_deploy"]["smoke_checks"] = {
+        "http": {"status": "ok", "http_status": 301},
+        "https": {"status": "ok", "http_status": 200},
+    }
     metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     monkeypatch.setattr("larops.commands.app.default_cert_file", lambda _domain: tmp_path / "fullchain.pem")
 
     info = runner.invoke(app, ["--config", str(config), "app", "info", "demo.test"])
     assert info.exit_code == 0
     assert "Application info: demo.test" in info.stdout
-    assert "current release:" in info.stdout
-    assert "profile preset: small-vps" in info.stdout
-    assert "db name: demo_test" in info.stdout
-    assert "env file: /var/www/demo.test/shared/.env" in info.stdout
-    assert "cert present: False" in info.stdout
+    assert "site: http://demo.test" in info.stdout
+    assert "release:" in info.stdout
+    assert "profile: small-vps / laravel / cache=fastcgi" in info.stdout
+    assert "db: mysql demo_test as demo_test" in info.stdout
+    assert "paths: current=" in info.stdout
+    assert "env=/var/www/demo.test/shared/.env" in info.stdout
+    assert "web: nginx=" in info.stdout
+    assert "cert=False" in info.stdout
+    assert "smoke http: 301" in info.stdout
+    assert "smoke https: 200" in info.stdout
 
 
 def test_deploy_prunes_old_releases(tmp_path: Path) -> None:

@@ -103,6 +103,7 @@ def _build_app_info_report(*, domain: str, paths: Path, releases: list[str], cur
             "ref": last_deploy.get("ref") if last_deploy else None,
             "deployed_at": last_deploy.get("deployed_at") if last_deploy else None,
             "health_check": last_deploy.get("health_check") if last_deploy else None,
+            "smoke_checks": last_deploy.get("smoke_checks") if last_deploy else None,
         },
         "database_provision": database_provision,
         "env_sync": env_sync,
@@ -128,63 +129,64 @@ def _emit_app_info_summary(app_ctx: AppContext, *, report: dict) -> None:
     profile = report.get("profile")
     db_provision = report.get("database_provision")
     env_sync = report.get("env_sync")
+    health_check = deploy.get("health_check") if isinstance(deploy.get("health_check"), dict) else None
+    smoke_checks = deploy.get("smoke_checks") if isinstance(deploy.get("smoke_checks"), dict) else None
+    https_enabled = bool(app.get("ssl")) or bool(web.get("certificate_present"))
+    scheme = "https" if https_enabled else "http"
 
     lines = [
-        f"  app root: {paths['root']}",
-        f"  shared path: {paths['shared']}",
-        f"  current path: {paths['current']}",
-        f"  metadata: {paths['metadata']}",
-        f"  releases: {releases['count']}",
-        f"  current release: {releases['current'] or 'none'}",
+        f"  site: {scheme}://{report['domain']}",
+        f"  release: {releases['current'] or 'none'} ({releases['count']} total)",
         f"  php: {app.get('php') or 'unknown'}",
-        f"  db engine: {app.get('db') or 'unknown'}",
-        f"  ssl enabled: {bool(app.get('ssl'))}",
+        f"  paths: current={paths['current']}, env={env_sync.get('env_file', str(Path(paths['shared']) / '.env')) if env_sync else str(Path(paths['shared']) / '.env')}",
+        f"  metadata: {paths['metadata']}",
+        f"  web: nginx={web['nginx_server_config_file']}, cert={web['certificate_present']}",
     ]
     if profile:
         lines.extend(
             [
-                f"  profile preset: {profile.get('preset') or 'custom'}",
-                f"  profile type: {profile.get('type') or 'custom'}",
-                f"  profile cache: {profile.get('cache') or 'none'}",
+                f"  profile: {profile.get('preset') or 'custom'} / {profile.get('type') or 'custom'} / cache={profile.get('cache') or 'none'}",
             ]
         )
         runtime = profile.get("runtime") if isinstance(profile.get("runtime"), dict) else {}
         if runtime:
             enabled = ", ".join(sorted(name for name, enabled in runtime.items() if enabled))
-            lines.append(f"  runtime profile: {enabled or 'none'}")
+            lines.append(f"  runtime: {enabled or 'none'}")
     if deploy.get("source"):
         lines.extend(
             [
-                f"  deploy source: {deploy['source']}",
-                f"  deploy ref: {deploy.get('ref') or 'unknown'}",
+                f"  deploy: ref={deploy.get('ref') or 'unknown'} source={deploy['source']}",
                 f"  deployed at: {deploy.get('deployed_at') or 'unknown'}",
             ]
         )
-        health_check = deploy.get("health_check")
-        if isinstance(health_check, dict) and health_check:
-            lines.append(f"  health check: {health_check.get('status', 'unknown')}")
-    lines.extend(
-        [
-            f"  nginx config: {web['nginx_server_config_file']}",
-            f"  nginx activation: {web['nginx_activation_mode']}",
-            f"  cert file: {web['certificate_file']}",
-            f"  cert present: {web['certificate_present']}",
-        ]
-    )
+    if health_check:
+        lines.append(f"  health check: {health_check.get('status', 'unknown')}")
     if db_provision:
         lines.extend(
             [
-                f"  db name: {db_provision.get('database', 'unknown')}",
-                f"  db user: {db_provision.get('user', 'unknown')}",
+                f"  db: {app.get('db') or 'unknown'} {db_provision.get('database', 'unknown')} as {db_provision.get('user', 'unknown')}",
                 f"  db host: {db_provision.get('host', 'unknown')}:{db_provision.get('port', 'unknown')}",
-                f"  db credential file: {db_provision.get('credential_file', 'unknown')}",
-                f"  db password file: {db_provision.get('password_file', 'unknown')}",
+                f"  db secrets: credential={db_provision.get('credential_file', 'unknown')}, password={db_provision.get('password_file', 'unknown')}",
             ]
         )
-    if env_sync:
-        lines.append(f"  env file: {env_sync.get('env_file', 'unknown')}")
+    if smoke_checks:
+        http_probe = smoke_checks.get("http")
+        https_probe = smoke_checks.get("https")
+        if isinstance(http_probe, dict):
+            lines.append(f"  smoke http: {_format_app_info_probe(http_probe)}")
+        if isinstance(https_probe, dict):
+            lines.append(f"  smoke https: {_format_app_info_probe(https_probe)}")
     for line in lines:
         app_ctx.emit_output("ok", line)
+
+
+def _format_app_info_probe(result: dict) -> str:
+    if result.get("status") == "failed":
+        return f"failed ({result.get('detail', 'unknown')})"
+    http_status = result.get("http_status")
+    if http_status is None:
+        return str(result.get("status", "unknown"))
+    return str(http_status)
 
 
 @app_cmd.command("create")
