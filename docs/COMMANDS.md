@@ -30,7 +30,7 @@ Common global options:
 | `bootstrap` | Bootstrap a fresh host and optionally seed the first app release | `larops bootstrap init --profile small-vps --apply` |
 | `create` | Shortcuts for first-time site creation, source bootstrap, managed Nginx site provisioning, and optional DB bootstrap | `larops create site example.com --git-url https://github.com/acme/app.git --with-db --apply` |
 | `site` | Site-oriented lifecycle operations | `larops site runtime enable example.com -w -s -a` |
-| `app` | Release-based app lifecycle (`create`, `deploy`, `rollback`, `info`) | `larops app deploy example.com --source /var/www/source/example.com --apply` |
+| `app` | Release-based app lifecycle (`create`, `deploy`, `rollback`, `bootstrap`, `info`) | `larops app bootstrap example.com --seed --apply` |
 | `worker` | Queue worker runtime control | `larops worker enable example.com --queue default --concurrency 2 --apply` |
 | `scheduler` | Scheduler runtime control | `larops scheduler enable example.com --apply` |
 | `horizon` | Horizon runtime control | `larops horizon enable example.com --apply` |
@@ -105,6 +105,18 @@ larops create site example.com \
   --with-db \
   --app-bootstrap-mode skip \
   --apply
+
+### Bootstrap an already provisioned app after schema or DB settings are ready
+
+```bash
+larops app bootstrap example.com --apply
+```
+
+### Bootstrap and seed an already provisioned app
+
+```bash
+larops app bootstrap example.com --seed --seeder-class DemoSeeder --apply
+```
 ```
 
 ### Clone from Git and issue Let's Encrypt in the same flow
@@ -135,6 +147,32 @@ When `larops create site <domain>` runs:
    - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` to skip Laravel bootstrap on first create
 9. After Nginx provisioning, `create site` prints lightweight smoke results such as `smoke http: 301` and `smoke https: 200`.
 10. If a previous failed create already wrote app metadata, rerun with `--force`.
+
+## `app bootstrap` Rules
+
+Use `larops app bootstrap <domain>` after the site already exists and you want LarOps to run the Laravel bootstrap steps in a controlled way.
+
+What it does:
+
+- re-syncs `DB_*` into `shared/.env` from `database_provision` when LarOps has DB metadata
+- writes `APP_KEY` directly into `shared/.env` if it is missing
+- reapplies writable permissions for `storage` and `bootstrap/cache`
+- runs the selected artisan steps on the current release
+
+Default artisan sequence:
+
+1. `php artisan migrate --force`
+2. `php artisan package:discover --ansi`
+3. `php artisan optimize:clear`
+4. `php artisan optimize`
+
+Optional flags:
+
+- `--seed`: add `php artisan db:seed --force`
+- `--seeder-class <ClassName>`: seed with a specific class
+- `--skip-migrate`
+- `--skip-package-discover`
+- `--skip-optimize`
 
 `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally want an off-host database.
 

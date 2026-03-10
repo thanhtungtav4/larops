@@ -45,6 +45,12 @@ def make_source(tmp_path: Path, name: str, content: str) -> Path:
     return source
 
 
+def make_laravel_source(tmp_path: Path, name: str, content: str) -> Path:
+    source = make_source(tmp_path, name, content)
+    (source / "artisan").write_text("<?php echo 'ok';", encoding="utf-8")
+    return source
+
+
 def test_app_create_apply_creates_structure(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     result = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
@@ -130,6 +136,10 @@ def test_app_info_non_json_prints_operator_summary(tmp_path: Path, monkeypatch) 
         "env_file": "/var/www/demo.test/shared/.env",
         "updated_keys": ["DB_CONNECTION", "DB_HOST"],
     }
+    payload["last_bootstrap"] = {
+        "bootstrapped_at": "2026-03-10T10:00:00+00:00",
+        "status": "completed",
+    }
     payload["last_deploy"]["smoke_checks"] = {
         "http": {"status": "ok", "http_status": 301},
         "https": {"status": "ok", "http_status": 200},
@@ -148,8 +158,116 @@ def test_app_info_non_json_prints_operator_summary(tmp_path: Path, monkeypatch) 
     assert "env=/var/www/demo.test/shared/.env" in info.stdout
     assert "web: nginx=" in info.stdout
     assert "cert=False" in info.stdout
+    assert "bootstrap: completed at 2026-03-10T10:00:00+00:00" in info.stdout
     assert "smoke http: 301" in info.stdout
     assert "smoke https: 200" in info.stdout
+
+
+def test_app_bootstrap_runs_expected_commands_and_syncs_env(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = make_laravel_source(tmp_path, "src-one", "release-one")
+
+    create = runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"])
+    assert create.exit_code == 0
+    deploy = runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source), "--apply"],
+    )
+    assert deploy.exit_code == 0
+
+    password_file = tmp_path / "state" / "secrets" / "db" / "demo.test.txt"
+    password_file.parent.mkdir(parents=True, exist_ok=True)
+    password_file.write_text("secret-pass\n", encoding="utf-8")
+
+    metadata_path = tmp_path / "state" / "apps" / "demo.test.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload["database_provision"] = {
+        "engine": "mysql",
+        "database": "demo_test",
+        "user": "demo_test",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "credential_file": str(tmp_path / "state" / "secrets" / "db" / "demo.test.cnf"),
+        "password_file": str(password_file),
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.app.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "app",
+            "bootstrap",
+            "demo.test",
+            "--seed",
+            "--seeder-class",
+            "DemoSeeder",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "App bootstrap completed for demo.test" in result.stdout
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    assert bootstrap[0] == "php artisan migrate --force"
+    assert bootstrap[1] == "php artisan package:discover --ansi"
+    assert "php artisan db:seed --force --class=DemoSeeder" in bootstrap
+    assert bootstrap[-2:] == ["php artisan optimize:clear", "php artisan optimize"]
+
+    env_file = tmp_path / "apps" / "demo.test" / "shared" / ".env"
+    env_body = env_file.read_text(encoding="utf-8")
+    assert "DB_CONNECTION=mysql" in env_body
+    assert "DB_HOST=127.0.0.1" in env_body
+    assert "DB_PASSWORD=secret-pass" in env_body
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["last_bootstrap"]["status"] == "completed"
+    assert metadata["last_bootstrap"]["commands"][2] == "php artisan db:seed --force --class=DemoSeeder"
+
+
+def test_app_bootstrap_skip_flags_reduce_commands(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = make_laravel_source(tmp_path, "src-one", "release-one")
+
+    assert runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"]).exit_code == 0
+    assert runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source), "--apply"],
+    ).exit_code == 0
+
+    phase_calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_release_commands(*, workdir: Path, phase: str, commands: list[str], timeout_seconds: int | None):
+        phase_calls.append((phase, list(commands)))
+        return [{"phase": phase, "command": command} for command in commands]
+
+    monkeypatch.setattr("larops.commands.app.run_release_commands", fake_run_release_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "app",
+            "bootstrap",
+            "demo.test",
+            "--skip-migrate",
+            "--skip-package-discover",
+            "--skip-optimize",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
+    assert bootstrap == []
 
 
 def test_deploy_prunes_old_releases(tmp_path: Path) -> None:

@@ -328,6 +328,9 @@ Current LarOps behavior:
   - run `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema
   - use `--app-bootstrap-mode eager` when the app is known-safe to boot on a fresh schema
   - use `--app-bootstrap-mode skip` when provider boot depends on schema or seed data
+- if first create intentionally skipped Laravel bootstrap, rerun it later with:
+  - `larops app bootstrap <domain> --apply`
+  - `larops app bootstrap <domain> --seed --seeder-class DemoSeeder --apply`
 - auto-creates the standard shared Laravel runtime directories:
   - `storage/framework/cache/data`
   - `storage/framework/sessions`

@@ -250,6 +250,7 @@ Source preparation rules:
   - it only runs `migrate`, `package:discover`, and `optimize*` when the app database already appears to have schema
   - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
   - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` on fresh apps whose providers read DB-backed settings during boot
+- If first create stops before Laravel bootstrap on purpose, run `larops app bootstrap <domain> --apply` after DB/schema setup. Add `--seed` or `--seeder-class <ClassName>` when the app expects seeded settings before normal boot.
 - After managed Nginx provisioning, `create site` prints lightweight smoke results such as `smoke http: 301` and `smoke https: 200` so you can see the live site state immediately.
 - Practical rule:
   - `auto`: default, safest general case
@@ -278,6 +279,7 @@ sudo larops --config /etc/larops/larops.yaml create site example.com \
   --git-url https://github.com/acme/example-app.git \
   --force \
   --apply
+sudo larops --config /etc/larops/larops.yaml app bootstrap example.com --seed --apply
 ```
 
 Application environment file:

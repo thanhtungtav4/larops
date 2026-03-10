@@ -1,5 +1,4 @@
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import urllib.error
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -84,23 +83,22 @@ def test_run_release_commands_passes_timeout(monkeypatch, tmp_path: Path) -> Non
 
 
 def test_probe_http_endpoint_preserves_redirect_status() -> None:
-    class RedirectHandler(BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
-            self.send_response(301)
-            self.send_header("Location", "/login")
-            self.end_headers()
+    class FakeOpener:
+        def open(self, request, timeout):  # noqa: ANN001
+            raise urllib.error.HTTPError(
+                request.full_url,
+                301,
+                "Moved Permanently",
+                hdrs=None,
+                fp=None,
+            )
 
-        def log_message(self, *_args):  # noqa: A003
-            return
-
-    server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("larops.services.release_service.urllib.request.build_opener", lambda *args: FakeOpener())
     try:
-        result = probe_http_endpoint(url=f"http://127.0.0.1:{server.server_port}/", timeout_seconds=2)
+        result = probe_http_endpoint(url="http://127.0.0.1/", timeout_seconds=2)
     finally:
-        server.shutdown()
-        thread.join(timeout=2)
+        monkeypatch.undo()
 
     assert result["status"] == "ok"
     assert result["http_status"] == 301

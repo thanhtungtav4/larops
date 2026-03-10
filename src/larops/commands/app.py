@@ -4,12 +4,18 @@ import re
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from larops.core.locks import CommandLock, CommandLockError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.app_bootstrap_service import (
+    ensure_shared_app_key,
+    resolve_bootstrap_app_commands,
+    sync_env_from_database_provision,
+)
 from larops.services.app_lifecycle import (
     AppLifecycleError,
     activate_release,
@@ -24,6 +30,8 @@ from larops.services.app_lifecycle import (
     save_metadata,
 )
 from larops.services.permissions_service import ensure_site_writable_permissions
+from larops.services.permissions_service import PermissionServiceError
+from larops.services.env_file_service import EnvFileServiceError
 from larops.services.nginx_site_service import resolve_nginx_site_paths
 from larops.services.release_service import (
     ReleaseServiceError,
@@ -74,6 +82,7 @@ def _build_app_info_report(*, domain: str, paths: Path, releases: list[str], cur
     cert_file = default_cert_file(domain)
     profile = metadata.get("profile") if isinstance(metadata.get("profile"), dict) else None
     last_deploy = metadata.get("last_deploy") if isinstance(metadata.get("last_deploy"), dict) else None
+    last_bootstrap = metadata.get("last_bootstrap") if isinstance(metadata.get("last_bootstrap"), dict) else None
     database_provision = metadata.get("database_provision") if isinstance(metadata.get("database_provision"), dict) else None
     env_sync = metadata.get("env_sync") if isinstance(metadata.get("env_sync"), dict) else None
 
@@ -105,6 +114,7 @@ def _build_app_info_report(*, domain: str, paths: Path, releases: list[str], cur
             "health_check": last_deploy.get("health_check") if last_deploy else None,
             "smoke_checks": last_deploy.get("smoke_checks") if last_deploy else None,
         },
+        "bootstrap": last_bootstrap,
         "database_provision": database_provision,
         "env_sync": env_sync,
         "web": {
@@ -131,6 +141,7 @@ def _emit_app_info_summary(app_ctx: AppContext, *, report: dict) -> None:
     env_sync = report.get("env_sync")
     health_check = deploy.get("health_check") if isinstance(deploy.get("health_check"), dict) else None
     smoke_checks = deploy.get("smoke_checks") if isinstance(deploy.get("smoke_checks"), dict) else None
+    bootstrap = report.get("bootstrap") if isinstance(report.get("bootstrap"), dict) else None
     https_enabled = bool(app.get("ssl")) or bool(web.get("certificate_present"))
     scheme = "https" if https_enabled else "http"
 
@@ -161,6 +172,8 @@ def _emit_app_info_summary(app_ctx: AppContext, *, report: dict) -> None:
         )
     if health_check:
         lines.append(f"  health check: {health_check.get('status', 'unknown')}")
+    if bootstrap:
+        lines.append(f"  bootstrap: {bootstrap.get('status', 'unknown')} at {bootstrap.get('bootstrapped_at', 'unknown')}")
     if db_provision:
         lines.extend(
             [
@@ -187,6 +200,28 @@ def _format_app_info_probe(result: dict) -> str:
     if http_status is None:
         return str(result.get("status", "unknown"))
     return str(http_status)
+
+
+def _build_manual_bootstrap_commands(
+    *,
+    current_path: Path,
+    shared_env_file: Path,
+    seed: bool,
+    seeder_class: str | None,
+    skip_migrate: bool,
+    skip_package_discover: bool,
+    skip_optimize: bool,
+) -> list[str]:
+    return resolve_bootstrap_app_commands(
+        current_path=current_path,
+        shared_env_file=shared_env_file,
+        bootstrap_mode="eager",
+        seed=seed,
+        seeder_class=seeder_class,
+        skip_migrate=skip_migrate,
+        skip_package_discover=skip_package_discover,
+        skip_optimize=skip_optimize,
+    )
 
 
 @app_cmd.command("create")
@@ -628,7 +663,7 @@ def rollback(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, ReleaseServiceError) as exc:
+    except (AppLifecycleError, ReleaseServiceError, PermissionServiceError, EnvFileServiceError) as exc:
         _emit_event(
             app_ctx,
             severity="error",
@@ -655,6 +690,165 @@ def rollback(
         health_check=health_check,
         runtime_refresh=runtime_refresh,
     )
+
+
+@app_cmd.command("bootstrap")
+def bootstrap(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    seed: bool = typer.Option(False, "--seed", help="Run php artisan db:seed --force after bootstrap."),
+    seeder_class: str | None = typer.Option(None, "--seeder-class", help="Seeder class to use with --seed."),
+    skip_migrate: bool = typer.Option(False, "--skip-migrate", help="Skip php artisan migrate --force."),
+    skip_package_discover: bool = typer.Option(
+        False,
+        "--skip-package-discover",
+        help="Skip php artisan package:discover --ansi.",
+    ),
+    skip_optimize: bool = typer.Option(False, "--skip-optimize", help="Skip optimize:clear and optimize."),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply app bootstrap. Without this flag, command runs in plan mode.",
+    ),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    paths = get_app_paths(
+        Path(app_ctx.config.deploy.releases_path),
+        Path(app_ctx.config.state_path),
+        domain,
+    )
+    try:
+        metadata = load_metadata(paths.metadata)
+        current_path = paths.current.resolve(strict=True)
+    except (AppLifecycleError, FileNotFoundError) as exc:
+        app_ctx.emit_output("error", f"Current release is not available for {domain}: {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if seeder_class:
+        seed = True
+
+    database_provision = metadata.get("database_provision") if isinstance(metadata.get("database_provision"), dict) else None
+    shared_env_file = paths.shared / ".env"
+    preview_commands = _build_manual_bootstrap_commands(
+        current_path=current_path,
+        shared_env_file=shared_env_file,
+        seed=seed,
+        seeder_class=seeder_class,
+        skip_migrate=skip_migrate,
+        skip_package_discover=skip_package_discover,
+        skip_optimize=skip_optimize,
+    )
+
+    app_ctx.emit_output(
+        "ok",
+        f"App bootstrap plan prepared for {domain}",
+        domain=domain,
+        current_release=get_current_release(paths),
+        current_path=str(current_path),
+        env_file=str(shared_env_file),
+        commands=preview_commands,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if not app_ctx.json_output:
+        app_ctx.emit_output("ok", f"  release: {get_current_release(paths) or 'unknown'}")
+        app_ctx.emit_output("ok", f"  env: {shared_env_file}")
+        app_ctx.emit_output("ok", f"  commands: {len(preview_commands)}")
+        for command in preview_commands:
+            app_ctx.emit_output("ok", f"    - {command}")
+
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    env_sync_result: dict[str, Any] | None = None
+    app_key_sync: dict[str, Any] | None = None
+    permissions_result: dict[str, Any] | None = None
+    bootstrap_reports: list[dict[str, Any]] = []
+    executed_commands: list[str] = []
+    try:
+        with CommandLock(_lock_name(domain)):
+            if database_provision is not None:
+                synced = sync_env_from_database_provision(
+                    shared_env_file=shared_env_file,
+                    database_provision=database_provision,
+                )
+                if synced is not None:
+                    env_sync_result, _password = synced
+
+            app_key_sync = ensure_shared_app_key(shared_env_file)
+            executed_commands = _build_manual_bootstrap_commands(
+                current_path=current_path,
+                shared_env_file=shared_env_file,
+                seed=seed,
+                seeder_class=seeder_class,
+                skip_migrate=skip_migrate,
+                skip_package_discover=skip_package_discover,
+                skip_optimize=skip_optimize,
+            )
+            permissions_result = ensure_site_writable_permissions(
+                base_releases_path=Path(app_ctx.config.deploy.releases_path),
+                state_path=Path(app_ctx.config.state_path),
+                domain=domain,
+                owner=app_ctx.config.systemd.user,
+                group=app_ctx.config.systemd.user,
+            )
+            bootstrap_reports = run_release_commands(
+                workdir=current_path,
+                phase="app-bootstrap",
+                commands=executed_commands,
+                timeout_seconds=app_ctx.config.deploy.post_activate_timeout_seconds,
+            )
+            metadata = load_metadata(paths.metadata)
+            if env_sync_result is not None:
+                metadata["env_sync"] = env_sync_result
+            metadata["last_bootstrap"] = {
+                "bootstrapped_at": datetime.now(UTC).isoformat(),
+                "status": "completed" if executed_commands else "skipped",
+                "commands": executed_commands,
+                "reports": bootstrap_reports,
+                "permissions": permissions_result,
+                "env_sync": env_sync_result,
+                "app_key_sync": app_key_sync,
+            }
+            save_metadata(paths.metadata, metadata)
+    except CommandLockError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=5) from exc
+    except (AppLifecycleError, ReleaseServiceError) as exc:
+        _emit_event(
+            app_ctx,
+            severity="error",
+            event_type="app.bootstrap.failed",
+            domain=domain,
+            message="App bootstrap failed.",
+            metadata={"error": str(exc)},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+        _emit_event(
+            app_ctx,
+            severity="info",
+            event_type="app.bootstrap.completed",
+            domain=domain,
+            message="App bootstrap completed.",
+            metadata={"commands": executed_commands},
+        )
+    app_ctx.emit_output(
+        "ok",
+        f"App bootstrap completed for {domain}",
+        commands=executed_commands,
+        reports=bootstrap_reports,
+        env_sync=env_sync_result,
+        permissions=permissions_result,
+    )
+    if not app_ctx.json_output:
+        app_ctx.emit_output("ok", f"  commands run: {len(executed_commands)}")
+        if env_sync_result is not None:
+            app_ctx.emit_output("ok", f"  env synced: {', '.join(env_sync_result.get('updated_keys', []))}")
+        if permissions_result is not None:
+            app_ctx.emit_output("ok", f"  permissions: {permissions_result.get('writable_mode')}")
 
 
 @app_cmd.command("info")

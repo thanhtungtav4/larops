@@ -122,7 +122,7 @@ larops create site example.com \
 | `bootstrap` | Bootstrap a fresh host | `larops bootstrap init --apply` |
 | `create` | First-time site create shortcut | `larops create site example.com --apply` |
 | `site` | Site-oriented lifecycle operations | `larops site runtime enable example.com -w -s -a` |
-| `app` | Release-based deploy and rollback | `larops app deploy example.com --source /var/www/source/example.com --apply` |
+| `app` | Release lifecycle, bootstrap, and inspection | `larops app bootstrap example.com --seed --apply` |
 | `worker`, `scheduler`, `horizon` | Runtime process control | `larops worker enable example.com --queue default --apply` |
 | `ssl` | Certificate issue, renew, check | `larops ssl issue example.com --challenge http --apply` |
 | `db` | Credentials, backup, restore, offsite | `larops db backup example.com --database appdb --apply` |
@@ -142,6 +142,7 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
   - automatic Laravel scaffold with `composer create-project` when the site resolves to a Laravel-family profile
 - `create site --with-db` can provision the application database, user, credential file, and password file in the same flow.
 - `create site --with-db` also syncs the main `DB_*` variables into `/var/www/<domain>/shared/.env`.
+- `app bootstrap <domain> --apply` reruns the Laravel bootstrap sequence on the current release without forcing a full re-create.
 - If the release contains `composer.json` but is missing `vendor/autoload.php`, LarOps auto-runs `composer install --no-scripts` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
 - The default frontend auto-build path currently assumes an npm-managed project and preflights `package.json -> engines.node` against the host Node runtime.
@@ -153,6 +154,7 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
   - it runs `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema
   - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
   - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` to avoid Laravel bootstrap entirely on first create
+- If first create intentionally skips Laravel bootstrap, run `larops app bootstrap <domain> --apply` after DB/schema is ready. Add `--seed` or `--seeder-class <ClassName>` when the app expects seeded settings before normal boot.
 - `bootstrap init --profile small-vps` now includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - On Ubuntu and Debian, `--php <major.minor>` automatically prepares the matching PHP package repository when the pinned version is newer than the distro default.
 - When deploy is enabled, `create site` also provisions a managed Nginx site config by default on supported single-node hosts.

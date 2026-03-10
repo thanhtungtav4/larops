@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import re
 import shutil
@@ -36,6 +35,13 @@ from larops.services.env_file_service import (
     EnvFileServiceError,
     database_env_updates,
     upsert_env_values,
+)
+from larops.services.app_bootstrap_service import (
+    AppBootstrapServiceError,
+    ensure_shared_app_key as _service_ensure_shared_app_key,
+    normalize_app_bootstrap_mode as _service_normalize_app_bootstrap_mode,
+    resolve_bootstrap_app_commands as _service_resolve_bootstrap_app_commands,
+    sync_env_from_database_provision as _service_sync_env_from_database_provision,
 )
 from larops.services.db_service import (
     DbServiceError,
@@ -231,36 +237,15 @@ def _run_create_site_smoke_checks(
     return result
 
 
-def _shared_env_has_app_key(env_file: Path) -> bool:
-    if not env_file.exists():
-        return False
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or not line.startswith("APP_KEY="):
-            continue
-        value = line.split("=", 1)[1].strip().strip('"').strip("'")
-        if value:
-            return True
-    return False
-
-
-def _generate_app_key() -> str:
-    return "base64:" + base64.b64encode(os.urandom(32)).decode("ascii")
-
-
 def _ensure_shared_app_key(env_file: Path) -> dict[str, Any] | None:
-    if _shared_env_has_app_key(env_file):
-        return None
-    return upsert_env_values(env_file=env_file, updates={"APP_KEY": _generate_app_key()})
+    return _service_ensure_shared_app_key(env_file)
 
 
 def _normalize_app_bootstrap_mode(raw_mode: str) -> str:
-    mode = raw_mode.strip().lower()
-    if mode not in _APP_BOOTSTRAP_MODES:
-        raise RuntimeProcessError(
-            f"Unsupported app bootstrap mode: {raw_mode}. Expected one of: auto, eager, skip."
-        )
-    return mode
+    try:
+        return _service_normalize_app_bootstrap_mode(raw_mode)
+    except AppBootstrapServiceError as exc:
+        raise RuntimeProcessError(str(exc)) from exc
 
 
 def _resolve_app_bootstrap_strategy(
@@ -298,22 +283,11 @@ def _resolve_app_bootstrap_strategy(
 
 
 def _resolve_bootstrap_app_commands(*, current_path: Path, shared_env_file: Path, bootstrap_mode: str) -> list[str]:
-    if not (current_path / "artisan").exists():
-        return []
-    if bootstrap_mode != "eager":
-        return []
-    commands: list[str] = []
-    if not _shared_env_has_app_key(shared_env_file):
-        commands.append("php artisan key:generate --force")
-    commands.extend(
-        [
-            "php artisan migrate --force",
-            "php artisan package:discover --ansi",
-            "php artisan optimize:clear",
-            "php artisan optimize",
-        ]
+    return _service_resolve_bootstrap_app_commands(
+        current_path=current_path,
+        shared_env_file=shared_env_file,
+        bootstrap_mode=bootstrap_mode,
     )
-    return commands
 
 
 def _effective_create_post_activate_commands(
@@ -356,27 +330,10 @@ def _preserved_site_metadata(paths: Any) -> dict[str, Any]:
 
 
 def _sync_env_from_database_provision(*, paths: Any, database_provision: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
-    password_file_raw = str(database_provision.get("password_file", "")).strip()
-    if not password_file_raw:
-        return None
-    password_file = Path(password_file_raw)
-    if not password_file.exists():
-        return None
-    password = password_file.read_text(encoding="utf-8").strip()
-    if not password:
-        return None
-    env_sync = upsert_env_values(
-        env_file=paths.shared / ".env",
-        updates=database_env_updates(
-            engine=str(database_provision["engine"]),
-            host=str(database_provision["host"]),
-            port=int(database_provision["port"]),
-            database=str(database_provision["database"]),
-            user=str(database_provision["user"]),
-            password=password,
-        ),
+    return _service_sync_env_from_database_provision(
+        shared_env_file=paths.shared / ".env",
+        database_provision=database_provision,
     )
-    return env_sync, password
 
 
 def _read_mysql_client_settings_from_file(credential_file: Path) -> dict[str, str]:

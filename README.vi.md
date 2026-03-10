@@ -60,7 +60,7 @@ Không nên xem LarOps là nền tảng HA/multi-node hoàn chỉnh. Phần mạ
 ## Tính năng chính
 
 - Provisioning stack: `stack install`, `bootstrap init`
-- App/site lifecycle: `app create`, `app deploy`, `app rollback`, `site create`, `site delete`, `site restore`
+- App/site lifecycle: `app create`, `app deploy`, `app rollback`, `app bootstrap`, `app info`, `site create`, `site delete`, `site restore`
 - Runtime management: `worker`, `scheduler`, `horizon`, `site runtime`, `reconcile`
 - SSL lifecycle: `ssl issue`, `ssl renew`, `ssl auto-renew`
 - Database ops: `db backup`, `db restore`, `db verify`, `db restore-verify`, `db offsite`
@@ -205,6 +205,7 @@ larops create site example.com \
   - nếu LarOps không xác định được DB context an toàn, nó sẽ bỏ bootstrap Laravel thay vì ép chạy artisan ở lần create đầu
   - dùng `--app-bootstrap-mode eager` cho app bạn biết chắc boot an toàn ngay từ lần create đầu
   - dùng `--app-bootstrap-mode skip` nếu provider boot phụ thuộc schema hoặc dữ liệu seed ban đầu
+- Nếu lần create đầu cố ý skip bootstrap Laravel, dùng `larops app bootstrap <domain> --apply` sau khi DB/schema đã sẵn sàng. Thêm `--seed` hoặc `--seeder-class <ClassName>` khi app cần seed dữ liệu trước khi boot bình thường.
 - Sau khi provision Nginx managed site, `create site` sẽ in smoke result nhẹ như `smoke http: 301` và `smoke https: 200` để bạn thấy ngay trạng thái HTTP/HTTPS thực tế.
 - `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
@@ -233,6 +234,12 @@ larops create site example.com \
   --git-url https://github.com/acme/example-app.git \
   --with-db \
   --app-bootstrap-mode skip \
+  --apply
+
+# bootstrap và seed release hiện tại ở bước sau
+larops app bootstrap example.com \
+  --seed \
+  --seeder-class DemoSeeder \
   --apply
 ```
 
