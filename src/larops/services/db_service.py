@@ -55,6 +55,13 @@ def default_password_file(state_path: Path, domain: str, *, engine: str = "mysql
     return state_path / "secrets" / "db" / f"{domain}.txt"
 
 
+def _mysql_account_hosts(app_host: str) -> list[str]:
+    host = app_host.strip()
+    if host in {"127.0.0.1", "localhost"}:
+        return ["127.0.0.1", "localhost"]
+    return [host]
+
+
 def list_backups(backup_dir: Path) -> list[str]:
     if not backup_dir.exists():
         return []
@@ -623,37 +630,46 @@ def provision_database(
     try:
         adopted_existing = False
         if normalized_engine == "mysql":
+            account_hosts = _mysql_account_hosts(app_host)
             database_exists = _mysql_scalar_for_admin(
                 admin_credential_file=admin_credential_file,
                 sql=f"SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '{db_name}';",
             )
-            user_exists = _mysql_scalar_for_admin(
-                admin_credential_file=admin_credential_file,
-                sql=(
-                    "SELECT COUNT(*) FROM mysql.user "
-                    f"WHERE user = '{db_user}' AND host = '{_sql_string(app_host)}';"
-                ),
-            )
-            if (database_exists or user_exists) and not allow_existing:
+            user_exists_map = {
+                host: _mysql_scalar_for_admin(
+                    admin_credential_file=admin_credential_file,
+                    sql=(
+                        "SELECT COUNT(*) FROM mysql.user "
+                        f"WHERE user = '{db_user}' AND host = '{_sql_string(host)}';"
+                    ),
+                )
+                for host in account_hosts
+            }
+            any_user_exists = any(user_exists_map.values())
+            if (database_exists or any_user_exists) and not allow_existing:
                 if database_exists:
                     raise DbServiceError(f"Database already exists: {db_name}")
-                raise DbServiceError(f"Database user already exists: {db_user}@{app_host}")
+                raise DbServiceError(f"Database user already exists: {db_user}@{','.join(account_hosts)}")
 
             statements: list[str] = []
             if not database_exists:
                 statements.append(f"CREATE DATABASE `{db_name}`;")
-            if not user_exists:
-                statements.append(
-                    f"CREATE USER '{db_user}'@'{_sql_string(app_host)}' IDENTIFIED BY '{_sql_string(password)}';"
-                )
-            elif allow_existing:
-                statements.append(
-                    f"ALTER USER '{db_user}'@'{_sql_string(app_host)}' IDENTIFIED BY '{_sql_string(password)}';"
-                )
-                adopted_existing = True
+            for host in account_hosts:
+                if not user_exists_map[host]:
+                    statements.append(
+                        f"CREATE USER '{db_user}'@'{_sql_string(host)}' IDENTIFIED BY '{_sql_string(password)}';"
+                    )
+                elif allow_existing:
+                    statements.append(
+                        f"ALTER USER '{db_user}'@'{_sql_string(host)}' IDENTIFIED BY '{_sql_string(password)}';"
+                    )
+                    adopted_existing = True
             if database_exists:
                 adopted_existing = True
-            statements.append(f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'{_sql_string(app_host)}';")
+            for host in account_hosts:
+                statements.append(
+                    f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'{_sql_string(host)}';"
+                )
             statements.append("FLUSH PRIVILEGES;")
             sql = " ".join(statements)
             run_command(_mysql_command_for_admin(admin_credential_file=admin_credential_file, sql=sql), check=True)
@@ -752,10 +768,13 @@ def deprovision_database(
 
     try:
         if normalized_engine == "mysql":
+            account_hosts = _mysql_account_hosts(app_host)
             sql = (
                 f"DROP DATABASE IF EXISTS `{db_name}`;"
-                f" DROP USER IF EXISTS '{db_user}'@'{_sql_string(app_host)}';"
-                " FLUSH PRIVILEGES;"
+                + " ".join(
+                    f" DROP USER IF EXISTS '{db_user}'@'{_sql_string(host)}';" for host in account_hosts
+                )
+                + " FLUSH PRIVILEGES;"
             )
             run_command(_mysql_command_for_admin(admin_credential_file=admin_credential_file, sql=sql), check=True)
         else:
