@@ -30,7 +30,7 @@ from larops.services.release_service import (
     resolve_build_commands_for_release,
     run_http_health_check,
     run_release_commands,
-    validate_frontend_build_requirements_for_release,
+    validate_release_build_requirements_for_release,
     write_release_manifest,
 )
 from larops.services.permissions_service import ensure_site_writable_permissions
@@ -372,9 +372,10 @@ def init(
                     release_dir=release_dir,
                     commands=phase_commands["build"],
                 )
-                validate_frontend_build_requirements_for_release(
+                validate_release_build_requirements_for_release(
+                    config=app_ctx.config.deploy,
                     release_dir=release_dir,
-                    commands=phase_commands["build"],
+                    commands=build_commands,
                 )
                 build_reports = run_release_commands(
                     workdir=release_dir,

@@ -173,6 +173,9 @@ What `create site` does on a fresh host:
 - If the release contains `composer.json` and `vendor/autoload.php` is missing, LarOps auto-runs `composer install` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
 - The default frontend auto-build path currently assumes an npm-managed project and preflights `package.json -> engines.node` against the host Node runtime.
+- LarOps also preflights required build tools before the release build starts:
+  - `deploy.composer_binary` must exist when Composer install is part of the build
+  - `npm` and `node` must exist for the default Vite auto-build path
 - Composer build install runs with `--no-scripts`; Laravel package discovery is deferred to the app bootstrap phase after `.env` and release symlinks are ready.
 - Use the same `--php` value on host bootstrap and site create so Nginx/FPM matches the installed PHP runtime.
 - On Ubuntu and Debian, LarOps auto-prepares the matching external PHP repository when the pinned version is newer than the distro default.

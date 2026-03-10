@@ -11,7 +11,7 @@ from larops.services.release_service import (
     build_rollback_phase_commands,
     resolve_build_commands_for_release,
     run_release_commands,
-    validate_frontend_build_requirements_for_release,
+    validate_release_build_requirements_for_release,
     ReleaseServiceError,
 )
 
@@ -184,7 +184,11 @@ def test_validate_frontend_build_requirements_for_release_rejects_pnpm_projects(
     (release_dir / "pnpm-lock.yaml").write_text("lockfileVersion: 9.0", encoding="utf-8")
 
     with pytest.raises(ReleaseServiceError, match="npm-managed projects only"):
-        validate_frontend_build_requirements_for_release(release_dir=release_dir, commands=[])
+        validate_release_build_requirements_for_release(
+            config=DeployConfig(),
+            release_dir=release_dir,
+            commands=[],
+        )
 
 
 def test_validate_frontend_build_requirements_for_release_rejects_node_engine_mismatch(monkeypatch, tmp_path: Path) -> None:
@@ -203,7 +207,11 @@ def test_validate_frontend_build_requirements_for_release_rejects_node_engine_mi
     )
 
     with pytest.raises(ReleaseServiceError, match="does not satisfy package.json engines.node"):
-        validate_frontend_build_requirements_for_release(release_dir=release_dir, commands=[])
+        validate_release_build_requirements_for_release(
+            config=DeployConfig(),
+            release_dir=release_dir,
+            commands=[],
+        )
 
 
 def test_validate_frontend_build_requirements_for_release_accepts_supported_node(monkeypatch, tmp_path: Path) -> None:
@@ -221,7 +229,50 @@ def test_validate_frontend_build_requirements_for_release_accepts_supported_node
         lambda *args, **kwargs: CompletedProcess(["node", "--version"], 0, stdout="v20.19.3\n", stderr=""),
     )
 
-    validate_frontend_build_requirements_for_release(release_dir=release_dir, commands=[])
+    validate_release_build_requirements_for_release(
+        config=DeployConfig(),
+        release_dir=release_dir,
+        commands=[],
+    )
+
+
+def test_validate_release_build_requirements_for_release_rejects_missing_composer_binary(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    (release_dir / "composer.json").write_text("{}", encoding="utf-8")
+    config = DeployConfig(composer_binary="/missing/composer")
+    commands = resolve_build_commands_for_release(config=config, release_dir=release_dir, commands=[])
+
+    with pytest.raises(ReleaseServiceError, match="Configured composer_binary is unavailable"):
+        validate_release_build_requirements_for_release(
+            config=config,
+            release_dir=release_dir,
+            commands=commands,
+        )
+
+
+def test_validate_release_build_requirements_for_release_rejects_missing_npm(monkeypatch, tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+
+    real_which = __import__("shutil").which
+
+    def fake_which(binary: str):
+        if binary == "npm":
+            return None
+        return real_which(binary)
+
+    monkeypatch.setattr("larops.services.release_service.shutil.which", fake_which)
+
+    with pytest.raises(ReleaseServiceError, match="npm is required for frontend auto-build"):
+        validate_release_build_requirements_for_release(
+            config=DeployConfig(),
+            release_dir=release_dir,
+            commands=[],
+        )
 
 
 def test_prepare_release_candidate_bootstraps_laravel_runtime_directories(tmp_path: Path) -> None:

@@ -252,6 +252,38 @@ larops stack install --web --apply
 
 Then redeploy or recreate the site.
 
+## Build phase fails with `composer: command not found`
+
+Symptom:
+
+```text
+Release phase 'build' failed ...
+bash: line 1: composer: command not found
+```
+
+Meaning:
+
+- The host does not have Composer in `PATH`, or
+- `deploy.composer_binary` points to the wrong binary path
+
+Current LarOps behavior:
+
+- LarOps preflights `deploy.composer_binary` before the release build starts
+- If Composer install is part of the build, the command now fails early with a clear config error instead of a late shell failure
+
+Fix:
+
+```bash
+larops stack install --web --apply
+```
+
+If Composer is installed in a non-default location, set an absolute path:
+
+```yaml
+deploy:
+  composer_binary: /usr/bin/composer
+```
+
 ## Laravel app fails with `Vite manifest not found`
 
 Symptom:

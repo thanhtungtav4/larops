@@ -145,6 +145,9 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
 - If the release contains `composer.json` but is missing `vendor/autoload.php`, LarOps auto-runs `composer install --no-scripts` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
 - The default frontend auto-build path currently assumes an npm-managed project and preflights `package.json -> engines.node` against the host Node runtime.
+- LarOps now preflights required build tools before the release build starts:
+  - `deploy.composer_binary` must exist when Composer install is part of the build
+  - `npm` and `node` must exist for the default Vite auto-build path
 - When the deployed source contains `artisan`, `create site` now defaults to `--app-bootstrap-mode auto`:
   - it writes `APP_KEY` directly into `shared/.env` when missing
   - it runs `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema

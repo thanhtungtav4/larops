@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import time
@@ -136,6 +137,16 @@ def _npm_install_command(release_dir: Path) -> str:
     return "npm install --no-audit --no-fund"
 
 
+def _binary_available(binary: str) -> bool:
+    normalized = binary.strip()
+    if not normalized:
+        return False
+    if "/" in normalized:
+        path = Path(normalized)
+        return path.is_file() and os.access(path, os.X_OK)
+    return shutil.which(normalized) is not None
+
+
 def _read_package_json(release_dir: Path) -> dict[str, Any] | None:
     package_json = release_dir / "package.json"
     if not package_json.exists():
@@ -251,11 +262,20 @@ def _node_version_satisfies(version_raw: str, requirement: str) -> bool:
     return False
 
 
-def validate_frontend_build_requirements_for_release(
+def validate_release_build_requirements_for_release(
     *,
+    config: DeployConfig,
     release_dir: Path,
     commands: list[str],
 ) -> None:
+    composer_install_command = _composer_install_command(config)
+    if any(command.strip() == composer_install_command for command in commands):
+        if not _binary_available(config.composer_binary):
+            raise ReleaseServiceError(
+                f"Configured composer_binary is unavailable: {config.composer_binary}. "
+                "Install Composer on the host or set deploy.composer_binary to the correct absolute path."
+            )
+
     if not _should_auto_build_frontend(release_dir):
         return
     if _has_explicit_frontend_build(commands):
@@ -266,6 +286,11 @@ def validate_frontend_build_requirements_for_release(
         raise ReleaseServiceError(
             "Frontend auto-build currently supports npm-managed projects only. "
             f"Detected package manager: {package_manager}. Configure deploy.asset_commands explicitly."
+        )
+    if not _binary_available("npm"):
+        raise ReleaseServiceError(
+            "npm is required for frontend auto-build but is unavailable. "
+            "Install npm/nodejs on the host or configure deploy.asset_commands explicitly."
         )
     node_requirement = ""
     if isinstance(package_json, dict):
