@@ -44,6 +44,28 @@ def test_ssl_issue_plan_mode(tmp_path: Path) -> None:
     assert "SSL issue plan prepared for example.test" in result.stdout
 
 
+def test_ssl_issue_plan_mode_uses_managed_site_webroot(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    releases_root = tmp_path / "apps"
+    state_root = tmp_path / "state"
+    current = releases_root / "example.test" / "current"
+    release = releases_root / "example.test" / "releases" / "r1"
+    public = release / "public"
+    public.mkdir(parents=True)
+    current.parent.mkdir(parents=True, exist_ok=True)
+    current.symlink_to(release)
+    metadata = state_root / "apps" / "example.test.json"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text('{"php":"8.4"}', encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "--json", "ssl", "issue", "example.test", "--challenge", "http"],
+    )
+    assert result.exit_code == 0
+    assert str(public) in result.stdout
+
+
 def test_ssl_issue_apply_reports_missing_certbot_cleanly(tmp_path: Path, monkeypatch) -> None:
     config = write_config(tmp_path)
 
@@ -60,6 +82,53 @@ def test_ssl_issue_apply_reports_missing_certbot_cleanly(tmp_path: Path, monkeyp
     )
     assert result.exit_code == 1
     assert "certbot is not installed" in result.stdout
+
+
+def test_ssl_issue_apply_rerenders_managed_site_https(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    releases_root = tmp_path / "apps"
+    state_root = tmp_path / "state"
+    release = releases_root / "example.test" / "releases" / "r1"
+    public = release / "public"
+    public.mkdir(parents=True)
+    current = releases_root / "example.test" / "current"
+    current.parent.mkdir(parents=True, exist_ok=True)
+    current.symlink_to(release)
+    metadata = state_root / "apps" / "example.test.json"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text('{"php":"8.4"}', encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_run_issue(command: list[str]) -> str:
+        captured["command"] = command
+        return "ok"
+
+    def fake_apply_nginx_site_config(*, domain: str, current_path: Path, php_version: str, https_enabled: bool, force: bool) -> dict:
+        captured["nginx"] = {
+            "domain": domain,
+            "current_path": str(current_path),
+            "php_version": php_version,
+            "https_enabled": https_enabled,
+            "force": force,
+        }
+        return {"https_enabled": https_enabled}
+
+    monkeypatch.setattr("larops.commands.ssl.run_issue", fake_run_issue)
+    monkeypatch.setattr("larops.commands.ssl.apply_nginx_site_config", fake_apply_nginx_site_config)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "ssl", "issue", "example.test", "--challenge", "http", "--apply"],
+    )
+    assert result.exit_code == 0
+    assert captured["nginx"] == {
+        "domain": "example.test",
+        "current_path": str(release),
+        "php_version": "8.4",
+        "https_enabled": True,
+        "force": True,
+    }
 
 
 def test_ssl_check_missing_cert_file(tmp_path: Path) -> None:

@@ -9,6 +9,8 @@ from larops.core.locks import CommandLock, CommandLockError
 from larops.core.shell import ShellCommandError
 from larops.models import EventRecord
 from larops.runtime import AppContext
+from larops.services.app_lifecycle import AppLifecycleError, get_app_paths, load_metadata
+from larops.services.nginx_site_service import NginxSiteServiceError, apply_nginx_site_config
 from larops.services.ssl_auto_renew import (
     SslAutoRenewError,
     disable_ssl_auto_renew,
@@ -28,6 +30,32 @@ from larops.services.ssl_service import (
 ssl_app = typer.Typer(help="Manage SSL certificate lifecycle.")
 auto_renew_app = typer.Typer(help="Manage SSL auto-renew timer.")
 ssl_app.add_typer(auto_renew_app, name="auto-renew")
+
+
+def _resolve_managed_site_context(app_ctx: AppContext, domain: str) -> dict | None:
+    paths = get_app_paths(
+        Path(app_ctx.config.deploy.releases_path),
+        Path(app_ctx.config.state_path),
+        domain,
+    )
+    try:
+        metadata = load_metadata(paths.metadata)
+    except AppLifecycleError:
+        return None
+
+    if not paths.current.exists():
+        return None
+
+    current_path = paths.current.resolve(strict=False)
+    public_path = current_path / "public"
+    webroot = public_path if public_path.exists() else current_path
+    php_version = str(metadata.get("php") or app_ctx.config.php_version or "8.3")
+    return {
+        "paths": paths,
+        "current_path": current_path,
+        "webroot": webroot,
+        "php_version": php_version,
+    }
 
 
 def _emit(app_ctx: AppContext, severity: str, event_type: str, message: str, metadata: dict | None = None) -> None:
@@ -174,6 +202,11 @@ def issue(
     apply: bool = typer.Option(False, "--apply", help="Apply certificate issuance."),
 ) -> None:
     app_ctx: AppContext = ctx.obj
+    managed_site = _resolve_managed_site_context(app_ctx, domain)
+    resolved_webroot = webroot_path
+    if resolved_webroot is None and challenge == "http" and managed_site is not None:
+        resolved_webroot = str(managed_site["webroot"])
+
     try:
         command = build_issue_command(
             domain=domain,
@@ -181,7 +214,7 @@ def issue(
             challenge=challenge,
             dns_provider=dns_provider,
             staging=staging,
-            webroot_path=webroot_path,
+            webroot_path=resolved_webroot,
         )
     except SslServiceError as exc:
         app_ctx.emit_output("error", str(exc))
@@ -192,6 +225,7 @@ def issue(
         f"SSL issue plan prepared for {domain}",
         domain=domain,
         command=command,
+        webroot_path=resolved_webroot,
         apply=apply,
         dry_run=app_ctx.dry_run,
     )
@@ -202,13 +236,22 @@ def issue(
     try:
         with CommandLock("ssl-issue"):
             output = run_issue(command)
-    except (CommandLockError, ShellCommandError, SslServiceError) as exc:
+            nginx_result = None
+            if managed_site is not None:
+                nginx_result = apply_nginx_site_config(
+                    domain=domain,
+                    current_path=managed_site["current_path"],
+                    php_version=managed_site["php_version"],
+                    https_enabled=True,
+                    force=True,
+                )
+    except (CommandLockError, ShellCommandError, SslServiceError, NginxSiteServiceError) as exc:
         _emit(app_ctx, "error", "ssl.issue.failed", "SSL issue failed.", {"error": str(exc), "domain": domain})
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=1) from exc
 
     _emit(app_ctx, "info", "ssl.issue.completed", "SSL issue completed.", {"domain": domain})
-    app_ctx.emit_output("ok", f"SSL issue completed for {domain}", output=output)
+    app_ctx.emit_output("ok", f"SSL issue completed for {domain}", output=output, nginx=nginx_result)
 
 
 @ssl_app.command("renew")
