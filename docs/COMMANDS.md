@@ -30,7 +30,7 @@ Common global options:
 | `bootstrap` | Bootstrap a fresh host and optionally seed the first app release | `larops bootstrap init --profile small-vps --apply` |
 | `create` | Shortcuts for first-time site creation, source bootstrap, managed Nginx site provisioning, and optional DB bootstrap | `larops create site example.com --git-url https://github.com/acme/app.git --with-db --apply` |
 | `site` | Site-oriented lifecycle operations | `larops site runtime enable example.com -w -s -a` |
-| `app` | Release-based app lifecycle (`create`, `deploy`, `rollback`, `bootstrap`, `info`) | `larops app bootstrap example.com --seed --apply` |
+| `app` | Release-based app lifecycle (`create`, `deploy`, `refresh`, `rollback`, `bootstrap`, `info`) | `larops app refresh example.com --seed --apply` |
 | `worker` | Queue worker runtime control | `larops worker enable example.com --queue default --concurrency 2 --apply` |
 | `scheduler` | Scheduler runtime control | `larops scheduler enable example.com --apply` |
 | `horizon` | Horizon runtime control | `larops horizon enable example.com --apply` |
@@ -117,6 +117,21 @@ larops app bootstrap example.com --apply
 ```bash
 larops app bootstrap example.com --seed --seeder-class DemoSeeder --apply
 ```
+
+### Pull latest git code, deploy, and rerun bootstrap
+
+```bash
+larops app refresh example.com --seed --apply
+```
+
+### Pull latest git code from a custom source path, deploy, and rerun bootstrap
+
+```bash
+larops app refresh example.com \
+  --source /var/www/source/example.com \
+  --seed \
+  --apply
+```
 ```
 
 ### Clone from Git and issue Let's Encrypt in the same flow
@@ -170,6 +185,26 @@ Optional flags:
 
 - `--seed`: add `php artisan db:seed --force`
 - `--seeder-class <ClassName>`: seed with a specific class
+- `--skip-migrate`
+- `--skip-package-discover`
+- `--skip-optimize`
+
+## `app refresh` Rules
+
+Use `larops app refresh <domain>` when the site already exists and you want a one-command update cycle for a git-managed source tree.
+
+What it does:
+
+1. resolves the source path from `--source`, or the last deploy source, or `deploy.source_base_path/<domain>`
+2. runs `git pull --ff-only origin <ref>` by default
+3. runs `larops app deploy <domain> --source <path> --apply`
+4. runs `larops app bootstrap <domain> --apply`
+
+Useful flags:
+
+- `--seed`
+- `--seeder-class <ClassName>`
+- `--no-git-pull` if you already updated the source tree yourself
 - `--skip-migrate`
 - `--skip-package-discover`
 - `--skip-optimize`

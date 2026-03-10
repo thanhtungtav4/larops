@@ -51,7 +51,7 @@ Current best fit:
 ## Feature Overview
 
 - Stack provisioning (`stack install`, `bootstrap init`).
-- App lifecycle (`app create`, `app deploy`, `app rollback`, `app bootstrap`, `app info`).
+- App lifecycle (`app create`, `app deploy`, `app refresh`, `app rollback`, `app bootstrap`, `app info`).
 - Site lifecycle shortcuts (`site create`, `site runtime`, `site permissions`, `site delete`).
 - SSL lifecycle (`ssl issue`, `ssl renew`, `ssl check`).
 - Database backup/restore and credentials (`db backup`, `db restore`, `db credential`).
@@ -187,6 +187,7 @@ What `create site` does on a fresh host:
   - use `--app-bootstrap-mode eager` for apps known to boot safely on first create
   - use `--app-bootstrap-mode skip` when provider boot depends on schema or seeded settings
 - If first create skips Laravel bootstrap on purpose, run `larops app bootstrap <domain> --apply` after DB/schema setup. Add `--seed` or `--seeder-class <ClassName>` when the app expects seeded settings before normal boot.
+- For an existing git-managed app, `larops app refresh <domain> --seed --apply` is the shortest path to pull latest code, deploy a new release, and rerun bootstrap.
 - After managed Nginx provisioning, `create site` prints lightweight smoke results such as `smoke http: 301` and `smoke https: 200` so you can see the live HTTP/HTTPS status immediately.
 - `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.

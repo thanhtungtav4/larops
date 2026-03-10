@@ -9,6 +9,7 @@ from typing import Any
 import typer
 
 from larops.core.locks import CommandLock, CommandLockError
+from larops.core.shell import ShellCommandError, run_command
 from larops.models import EventRecord
 from larops.runtime import AppContext
 from larops.services.app_bootstrap_service import (
@@ -222,6 +223,42 @@ def _build_manual_bootstrap_commands(
         skip_package_discover=skip_package_discover,
         skip_optimize=skip_optimize,
     )
+
+
+def _resolve_refresh_source_path(
+    *,
+    domain: str,
+    explicit_source: Path | None,
+    metadata: dict[str, Any],
+    app_ctx: AppContext,
+) -> Path:
+    if explicit_source is not None:
+        resolved = explicit_source.resolve()
+        if not resolved.exists() or not resolved.is_dir():
+            raise AppLifecycleError(f"Source path does not exist or is not a directory: {resolved}")
+        return resolved
+
+    last_deploy = metadata.get("last_deploy") if isinstance(metadata.get("last_deploy"), dict) else None
+    source_raw = last_deploy.get("source") if last_deploy else None
+    if isinstance(source_raw, str) and source_raw.strip():
+        return Path(source_raw).resolve()
+
+    resolved = (Path(app_ctx.config.deploy.source_base_path) / domain).resolve()
+    if not resolved.exists() or not resolved.is_dir():
+        raise AppLifecycleError(f"Source path does not exist or is not a directory: {resolved}")
+    return resolved
+
+
+def _git_pull_source(*, source_path: Path, ref: str) -> dict[str, str]:
+    if not (source_path / ".git").exists():
+        raise AppLifecycleError(f"Source path is not a git repository: {source_path}")
+
+    before = run_command(["git", "-C", str(source_path), "rev-parse", "HEAD"], check=True)
+    before_ref = (before.stdout or "").strip()
+    run_command(["git", "-C", str(source_path), "pull", "--ff-only", "origin", ref], check=True)
+    after = run_command(["git", "-C", str(source_path), "rev-parse", "HEAD"], check=True)
+    after_ref = (after.stdout or "").strip()
+    return {"before": before_ref, "after": after_ref}
 
 
 @app_cmd.command("create")
@@ -536,6 +573,129 @@ def deploy(
     )
 
 
+@app_cmd.command("refresh")
+def refresh(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="Application domain."),
+    ref: str = typer.Option("main", "--ref", help="Git ref to pull and deploy."),
+    source: Path | None = typer.Option(
+        None,
+        "--source",
+        help="Source directory. Defaults to last deploy source or deploy.source_base_path/<domain>.",
+        exists=False,
+        file_okay=False,
+    ),
+    git_pull: bool = typer.Option(True, "--git-pull/--no-git-pull", help="Pull source from git before deploy."),
+    seed: bool = typer.Option(False, "--seed", help="Run php artisan db:seed --force after deploy."),
+    seeder_class: str | None = typer.Option(None, "--seeder-class", help="Seeder class to use with --seed."),
+    skip_migrate: bool = typer.Option(False, "--skip-migrate", help="Skip php artisan migrate --force."),
+    skip_package_discover: bool = typer.Option(
+        False,
+        "--skip-package-discover",
+        help="Skip php artisan package:discover --ansi.",
+    ),
+    skip_optimize: bool = typer.Option(False, "--skip-optimize", help="Skip optimize:clear and optimize."),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply refresh. Without this flag, command runs in plan mode.",
+    ),
+) -> None:
+    app_ctx: AppContext = ctx.obj
+    paths = get_app_paths(
+        Path(app_ctx.config.deploy.releases_path),
+        Path(app_ctx.config.state_path),
+        domain,
+    )
+    try:
+        metadata = load_metadata(paths.metadata)
+    except AppLifecycleError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    try:
+        source_path = _resolve_refresh_source_path(domain=domain, explicit_source=source, metadata=metadata, app_ctx=app_ctx)
+    except AppLifecycleError as exc:
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+    app_ctx.emit_output(
+        "ok",
+        f"Refresh plan prepared for {domain}",
+        domain=domain,
+        source=str(source_path),
+        ref=ref,
+        git_pull=git_pull,
+        seed=seed,
+        apply=apply,
+        dry_run=app_ctx.dry_run,
+    )
+    if not app_ctx.json_output:
+        app_ctx.emit_output("ok", f"  source: {source_path}")
+        app_ctx.emit_output("ok", f"  ref: {ref}")
+        app_ctx.emit_output("ok", f"  git pull: {'yes' if git_pull else 'no'}")
+        app_ctx.emit_output("ok", f"  bootstrap seed: {'yes' if seed or seeder_class else 'no'}")
+
+    if app_ctx.dry_run or not apply:
+        app_ctx.emit_output("ok", "Plan mode finished. Use --apply to execute changes.")
+        return
+
+    git_result: dict[str, str] | None = None
+    try:
+        _emit_event(
+            app_ctx,
+            severity="info",
+            event_type="app.refresh.started",
+            domain=domain,
+            message="Application refresh started.",
+            metadata={"ref": ref, "source": str(source_path), "git_pull": git_pull},
+        )
+        if git_pull:
+            git_result = _git_pull_source(source_path=source_path, ref=ref)
+            app_ctx.emit_output(
+                "ok",
+                "Git source updated.",
+                before=git_result["before"],
+                after=git_result["after"],
+            )
+            if not app_ctx.json_output:
+                app_ctx.emit_output("ok", f"  git: {git_result['before']} -> {git_result['after']}")
+
+        deploy(ctx, domain=domain, ref=ref, source=source_path, apply=True)
+        bootstrap(
+            ctx,
+            domain=domain,
+            seed=seed,
+            seeder_class=seeder_class,
+            skip_migrate=skip_migrate,
+            skip_package_discover=skip_package_discover,
+            skip_optimize=skip_optimize,
+            apply=True,
+        )
+    except typer.Exit:
+        raise
+    except (AppLifecycleError, ReleaseServiceError, ShellCommandError) as exc:
+        _emit_event(
+            app_ctx,
+            severity="error",
+            event_type="app.refresh.failed",
+            domain=domain,
+            message="Application refresh failed.",
+            metadata={"error": str(exc), "source": str(source_path), "git_pull": git_pull},
+        )
+        app_ctx.emit_output("error", str(exc))
+        raise typer.Exit(code=2) from exc
+
+    _emit_event(
+        app_ctx,
+        severity="info",
+        event_type="app.refresh.completed",
+        domain=domain,
+        message="Application refresh completed.",
+        metadata={"source": str(source_path), "git": git_result},
+    )
+    app_ctx.emit_output("ok", f"Refresh completed for {domain}", source=str(source_path), git=git_result)
+
+
 @app_cmd.command("rollback")
 def rollback(
     ctx: typer.Context,
@@ -826,15 +986,14 @@ def bootstrap(
         )
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=2) from exc
-
-        _emit_event(
-            app_ctx,
-            severity="info",
-            event_type="app.bootstrap.completed",
-            domain=domain,
-            message="App bootstrap completed.",
-            metadata={"commands": executed_commands},
-        )
+    _emit_event(
+        app_ctx,
+        severity="info",
+        event_type="app.bootstrap.completed",
+        domain=domain,
+        message="App bootstrap completed.",
+        metadata={"commands": executed_commands},
+    )
     app_ctx.emit_output(
         "ok",
         f"App bootstrap completed for {domain}",

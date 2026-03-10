@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -268,6 +269,93 @@ def test_app_bootstrap_skip_flags_reduce_commands(tmp_path: Path, monkeypatch) -
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
     assert bootstrap == []
+
+
+def test_app_refresh_runs_git_pull_then_deploy_and_bootstrap(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "src-refresh", "release-refresh")
+    (source / ".git").mkdir()
+
+    assert runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"]).exit_code == 0
+
+    metadata_path = tmp_path / "state" / "apps" / "demo.test.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload["last_deploy"] = {"source": str(source), "ref": "main"}
+    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    git_calls: list[list[str]] = []
+    deploy_calls: list[dict] = []
+    bootstrap_calls: list[dict] = []
+
+    def fake_run_command(command: list[str], check: bool = False, timeout_seconds=None):
+        git_calls.append(list(command))
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            stdout = "oldsha\n" if len([c for c in git_calls if c[-2:] == ["rev-parse", "HEAD"]]) == 1 else "newsha\n"
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[:3] == ["git", "-C", str(source)] and "pull" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="Updated\n", stderr="")
+        raise AssertionError(f"Unexpected command: {command}")
+
+    def fake_deploy(ctx, *, domain, ref, source, apply):
+        deploy_calls.append({"domain": domain, "ref": ref, "source": str(source), "apply": apply})
+
+    def fake_bootstrap(
+        ctx,
+        *,
+        domain,
+        seed,
+        seeder_class,
+        skip_migrate,
+        skip_package_discover,
+        skip_optimize,
+        apply,
+    ):
+        bootstrap_calls.append(
+            {
+                "domain": domain,
+                "seed": seed,
+                "seeder_class": seeder_class,
+                "skip_migrate": skip_migrate,
+                "skip_package_discover": skip_package_discover,
+                "skip_optimize": skip_optimize,
+                "apply": apply,
+            }
+        )
+
+    monkeypatch.setattr("larops.commands.app.run_command", fake_run_command)
+    monkeypatch.setattr("larops.commands.app.deploy", fake_deploy)
+    monkeypatch.setattr("larops.commands.app.bootstrap", fake_bootstrap)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "app",
+            "refresh",
+            "demo.test",
+            "--seed",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Refresh completed for demo.test" in result.stdout
+    assert git_calls[0][-2:] == ["rev-parse", "HEAD"]
+    assert git_calls[1][0:3] == ["git", "-C", str(source)]
+    assert git_calls[1][3:] == ["pull", "--ff-only", "origin", "main"]
+    assert git_calls[2][-2:] == ["rev-parse", "HEAD"]
+    assert deploy_calls == [{"domain": "demo.test", "ref": "main", "source": str(source), "apply": True}]
+    assert bootstrap_calls == [
+        {
+            "domain": "demo.test",
+            "seed": True,
+            "seeder_class": None,
+            "skip_migrate": False,
+            "skip_package_discover": False,
+            "skip_optimize": False,
+            "apply": True,
+        }
+    ]
 
 
 def test_deploy_prunes_old_releases(tmp_path: Path) -> None:

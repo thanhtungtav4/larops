@@ -122,7 +122,7 @@ larops create site example.com \
 | `bootstrap` | Bootstrap a fresh host | `larops bootstrap init --apply` |
 | `create` | First-time site create shortcut | `larops create site example.com --apply` |
 | `site` | Site-oriented lifecycle operations | `larops site runtime enable example.com -w -s -a` |
-| `app` | Release lifecycle, bootstrap, and inspection | `larops app bootstrap example.com --seed --apply` |
+| `app` | Release lifecycle, refresh, bootstrap, and inspection | `larops app refresh example.com --seed --apply` |
 | `worker`, `scheduler`, `horizon` | Runtime process control | `larops worker enable example.com --queue default --apply` |
 | `ssl` | Certificate issue, renew, check | `larops ssl issue example.com --challenge http --apply` |
 | `db` | Credentials, backup, restore, offsite | `larops db backup example.com --database appdb --apply` |
@@ -143,6 +143,7 @@ Full command index: [docs/COMMANDS.md](docs/COMMANDS.md)
 - `create site --with-db` can provision the application database, user, credential file, and password file in the same flow.
 - `create site --with-db` also syncs the main `DB_*` variables into `/var/www/<domain>/shared/.env`.
 - `app bootstrap <domain> --apply` reruns the Laravel bootstrap sequence on the current release without forcing a full re-create.
+- `app refresh <domain> --seed --apply` is the shortest "pull latest git, deploy, migrate/seed, optimize" path for an existing app.
 - If the release contains `composer.json` but is missing `vendor/autoload.php`, LarOps auto-runs `composer install --no-scripts` during the build phase.
 - If the release contains `package.json` plus `vite.config.*` and `public/build/manifest.json` is missing, LarOps auto-runs `npm ci|install` and `npm run build` during the build phase.
 - The default frontend auto-build path currently assumes an npm-managed project and preflights `package.json -> engines.node` against the host Node runtime.
