@@ -287,7 +287,7 @@ def test_create_site_apply_bootstraps_laravel_artisan_after_deploy(tmp_path: Pat
     assert bootstrap[0][1] == "php artisan package:discover --ansi"
     assert "php artisan optimize" in bootstrap[0]
     assert "APP_KEY=" in (tmp_path / "apps" / "demo.test" / "shared" / ".env").read_text(encoding="utf-8")
-    assert "app bootstrap: completed" in result.stdout
+    assert "bootstrap: completed" in result.stdout
 
 
 def test_create_site_apply_skips_key_generate_when_app_key_exists(tmp_path: Path, monkeypatch) -> None:
@@ -448,7 +448,7 @@ def test_create_site_apply_auto_mode_skips_bootstrap_without_database_context(tm
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
     assert bootstrap == []
     assert "APP_KEY=" in (tmp_path / "apps" / "demo.test" / "shared" / ".env").read_text(encoding="utf-8")
-    assert "app bootstrap: skipped (no-db-context)" in result.stdout
+    assert "bootstrap: skipped (no-db-context)" in result.stdout
 
 
 def test_resolve_app_bootstrap_strategy_auto_eager_when_database_has_tables(monkeypatch, tmp_path: Path) -> None:
@@ -519,7 +519,7 @@ def test_create_site_apply_skip_bootstrap_mode_avoids_framework_boot_commands(tm
     post_activate = [commands for phase, commands in phase_calls if phase == "post-activate"][0]
     assert bootstrap == []
     assert post_activate == ["echo custom-post"]
-    assert "app bootstrap: skipped (explicit-skip)" in result.stdout
+    assert "bootstrap: skipped (explicit-skip)" in result.stdout
 
 
 def test_create_site_apply_skips_app_bootstrap_when_artisan_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -542,7 +542,7 @@ def test_create_site_apply_skips_app_bootstrap_when_artisan_is_missing(tmp_path:
     assert result.exit_code == 0
     bootstrap = [commands for phase, commands in phase_calls if phase == "app-bootstrap"][0]
     assert bootstrap == []
-    assert "app bootstrap: completed" not in result.stdout
+    assert "bootstrap: completed" not in result.stdout
 
 
 def test_create_site_invalid_type_rejected(tmp_path: Path) -> None:
@@ -717,6 +717,8 @@ def test_create_site_apply_reports_smoke_statuses(tmp_path: Path, monkeypatch) -
     )
 
     assert result.exit_code == 0
+    assert "site: https://demo.test" in result.stdout
+    assert "db:" not in result.stdout
     assert "smoke http: 301" in result.stdout
     assert "smoke https: 200" in result.stdout
     metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
@@ -793,8 +795,10 @@ def test_create_site_apply_with_db_provisions_database_and_persists_metadata(tmp
     assert "DB_CONNECTION=mysql" in env_body
     assert "DB_DATABASE=demo_test" in env_body
     assert "DB_USERNAME=demo_test" in env_body
-    assert "db credential file:" in result.stdout
-    assert "env file:" in result.stdout
+    assert "db: mysql demo_test as demo_test" in result.stdout
+    assert "db secrets: credential=" in result.stdout
+    assert "paths: current=" in result.stdout
+    assert "env=" in result.stdout
 
 
 def test_create_site_atomic_with_db_rolls_back_database_on_follow_up_failure(tmp_path: Path, monkeypatch) -> None:

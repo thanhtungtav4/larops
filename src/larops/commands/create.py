@@ -130,6 +130,7 @@ def _emit(
 def _emit_create_site_summary(
     app_ctx: AppContext,
     *,
+    domain: str,
     paths: Any,
     deploy: bool,
     release_id: str | None,
@@ -147,44 +148,26 @@ def _emit_create_site_summary(
     if app_ctx.json_output:
         return
 
-    lines = [
-        f"  app root: {paths.root}",
-        f"  metadata: {paths.metadata}",
-        f"  php: {php_runtime}",
-    ]
-    if deploy and release_id:
-        lines.extend(
-            [
-                f"  current release: {release_id}",
-                f"  current path: {paths.current}",
-            ]
-        )
+    lines = [f"  site: {_site_summary_target(domain=domain, nginx_result=nginx_result, ssl_result=ssl_result)}"]
+    lines.append(f"  release: {release_id or 'not deployed'}")
+    lines.append(f"  php: {php_runtime}")
+    lines.append(f"  paths: current={paths.current}, env={_summary_env_path(env_sync_result, paths)}")
+    lines.append(f"  metadata: {paths.metadata}")
     if nginx_result is not None:
-        lines.append(f"  nginx config: {nginx_result.get('site_config_file', 'managed')}")
-    if ssl_result is not None:
-        lines.append("  ssl: letsencrypt issued")
-    elif nginx_result is not None and nginx_result.get("https_enabled"):
-        lines.append("  ssl: existing certificate bound")
+        lines.append(f"  nginx: {nginx_result.get('site_config_file', 'managed')}")
     if runtime_results:
         enabled = ", ".join(sorted(name for name, result in runtime_results.items() if result.get("enabled")))
         lines.append(f"  runtime: {enabled or 'none'}")
     if db_result is not None:
-        lines.extend(
-            [
-                f"  db engine: {db_result['engine']}",
-                f"  db name: {db_result['database']}",
-                f"  db user: {db_result['user']}",
-                f"  db credential file: {db_result['credential_file']}",
-                f"  db password file: {db_result['password_file']}",
-            ]
+        lines.append(f"  db: {db_result['engine']} {db_result['database']} as {db_result['user']}")
+        lines.append(
+            f"  db secrets: credential={db_result['credential_file']}, password={db_result['password_file']}"
         )
-    if env_sync_result is not None:
-        lines.append(f"  env file: {env_sync_result['env_file']}")
     if permissions_result is not None:
         owner_group = "applied" if permissions_result.get("owner_group_applied") else "skipped"
-        lines.append(f"  writable permissions: {permissions_result['writable_mode']} ({owner_group})")
+        lines.append(f"  permissions: {permissions_result['writable_mode']} ({owner_group})")
     if bootstrap_status is not None:
-        lines.append(f"  app bootstrap: {bootstrap_status}")
+        lines.append(f"  bootstrap: {bootstrap_status}")
     if smoke_checks:
         http_probe = smoke_checks.get("http")
         https_probe = smoke_checks.get("https")
@@ -192,6 +175,8 @@ def _emit_create_site_summary(
             lines.append(f"  smoke http: {_format_smoke_probe(http_probe)}")
         if https_probe is not None:
             lines.append(f"  smoke https: {_format_smoke_probe(https_probe)}")
+    if bootstrap_status and bootstrap_status.startswith("skipped"):
+        lines.append("  next step: run app-specific migrations/bootstrap after schema is ready")
     for line in lines:
         app_ctx.emit_output("ok", line)
 
@@ -203,6 +188,18 @@ def _format_smoke_probe(result: dict[str, Any]) -> str:
     if http_status is None:
         return str(result.get("status", "unknown"))
     return str(http_status)
+
+
+def _summary_env_path(env_sync_result: dict[str, Any] | None, paths: Any) -> Path:
+    if env_sync_result is not None and env_sync_result.get("env_file"):
+        return Path(str(env_sync_result["env_file"]))
+    return paths.shared / ".env"
+
+
+def _site_summary_target(*, domain: str, nginx_result: dict | None, ssl_result: dict | None) -> str:
+    https_enabled = bool(ssl_result is not None or (nginx_result is not None and nginx_result.get("https_enabled")))
+    scheme = "https" if https_enabled else "http"
+    return f"{scheme}://{domain}"
 
 
 def _run_create_site_smoke_checks(
@@ -1648,6 +1645,7 @@ def create_site(
     )
     _emit_create_site_summary(
         app_ctx,
+        domain=domain,
         paths=paths,
         deploy=deploy,
         release_id=release_id,
