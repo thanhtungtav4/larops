@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
 from typer.testing import CliRunner
 
 from larops.cli import app
@@ -10,6 +11,16 @@ from larops.services.nginx_site_service import NginxSiteServiceError
 from larops.services.ssl_service import SslServiceError
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _stub_smoke_probes(monkeypatch):
+    def fake_probe_http_endpoint(**kwargs):
+        url = str(kwargs["url"])
+        status = 200 if url.startswith("https://") else 301
+        return {"checked": True, "status": "ok", "url": url, "http_status": status}
+
+    monkeypatch.setattr("larops.commands.create.probe_http_endpoint", fake_probe_http_endpoint)
 
 
 def write_config(tmp_path: Path) -> Path:
@@ -677,6 +688,36 @@ def test_create_site_apply_uses_existing_certificate_for_https_vhost(tmp_path: P
     assert result.exit_code == 0
     assert len(captured) == 1
     assert captured[0]["https_enabled"] is True
+
+
+def test_create_site_apply_reports_smoke_statuses(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    cert_dir = tmp_path / "letsencrypt" / "demo.test"
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    (cert_dir / "fullchain.pem").write_text("cert", encoding="utf-8")
+    (cert_dir / "privkey.pem").write_text("key", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "larops.commands.create.default_cert_file",
+        lambda _domain: cert_dir / "fullchain.pem",
+    )
+
+    def fake_probe_http_endpoint(**kwargs):
+        url = str(kwargs["url"])
+        status = 200 if url.startswith("https://") else 301
+        return {"checked": True, "status": "ok", "url": url, "http_status": status}
+
+    monkeypatch.setattr("larops.commands.create.probe_http_endpoint", fake_probe_http_endpoint)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "create", "site", "demo.test", "--force", "--apply"],
+    )
+
+    assert result.exit_code == 0
+    assert "smoke http: 301" in result.stdout
+    assert "smoke https: 200" in result.stdout
 
 
 def test_create_site_plan_with_db_exposes_db_provision_plan(tmp_path: Path) -> None:

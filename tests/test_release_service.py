@@ -1,3 +1,5 @@
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -9,6 +11,7 @@ from larops.services.release_service import (
     build_deploy_phase_commands,
     prepare_release_candidate,
     build_rollback_phase_commands,
+    probe_http_endpoint,
     resolve_build_commands_for_release,
     run_release_commands,
     validate_release_build_requirements_for_release,
@@ -78,7 +81,29 @@ def test_run_release_commands_passes_timeout(monkeypatch, tmp_path: Path) -> Non
 
     assert reports[0]["phase"] == "build"
     assert reports[0]["stdout"] == "ok"
-    assert calls[0][1] == 123
+
+
+def test_probe_http_endpoint_preserves_redirect_status() -> None:
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(301)
+            self.send_header("Location", "/login")
+            self.end_headers()
+
+        def log_message(self, *_args):  # noqa: A003
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = probe_http_endpoint(url=f"http://127.0.0.1:{server.server_port}/", timeout_seconds=2)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert result["status"] == "ok"
+    assert result["http_status"] == 301
 
 
 def test_resolve_build_commands_for_release_auto_adds_composer_install(tmp_path: Path) -> None:

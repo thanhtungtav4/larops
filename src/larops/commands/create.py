@@ -50,6 +50,7 @@ from larops.services.db_service import (
 )
 from larops.services.release_service import (
     build_deploy_phase_commands,
+    probe_http_endpoint,
     ReleaseServiceError,
     prepare_release_candidate,
     resolve_build_commands_for_release,
@@ -141,6 +142,7 @@ def _emit_create_site_summary(
     bootstrap_reports: list[dict[str, Any]],
     bootstrap_status: str | None,
     permissions_result: dict[str, Any] | None,
+    smoke_checks: dict[str, dict[str, Any]] | None,
 ) -> None:
     if app_ctx.json_output:
         return
@@ -183,8 +185,53 @@ def _emit_create_site_summary(
         lines.append(f"  writable permissions: {permissions_result['writable_mode']} ({owner_group})")
     if bootstrap_status is not None:
         lines.append(f"  app bootstrap: {bootstrap_status}")
+    if smoke_checks:
+        http_probe = smoke_checks.get("http")
+        https_probe = smoke_checks.get("https")
+        if http_probe is not None:
+            lines.append(f"  smoke http: {_format_smoke_probe(http_probe)}")
+        if https_probe is not None:
+            lines.append(f"  smoke https: {_format_smoke_probe(https_probe)}")
     for line in lines:
         app_ctx.emit_output("ok", line)
+
+
+def _format_smoke_probe(result: dict[str, Any]) -> str:
+    if result.get("status") == "failed":
+        return f"failed ({result.get('detail', 'unknown')})"
+    http_status = result.get("http_status")
+    if http_status is None:
+        return str(result.get("status", "unknown"))
+    return str(http_status)
+
+
+def _run_create_site_smoke_checks(
+    *,
+    app_ctx: AppContext,
+    domain: str,
+    https_enabled: bool,
+) -> dict[str, dict[str, Any]]:
+    smoke_host = (app_ctx.config.deploy.health_check_host or "127.0.0.1").strip() or "127.0.0.1"
+    use_domain_host_header = app_ctx.config.deploy.health_check_use_domain_host_header
+    host_header = domain if use_domain_host_header else None
+    timeout_seconds = app_ctx.config.deploy.health_check_timeout_seconds
+
+    http_probe = probe_http_endpoint(
+        url=f"http://{smoke_host}/",
+        timeout_seconds=timeout_seconds,
+        host_header=host_header,
+        verify_tls=True,
+    )
+    result: dict[str, dict[str, Any]] = {"http": http_probe}
+    if https_enabled:
+        verify_tls = smoke_host == domain and host_header in {None, domain}
+        result["https"] = probe_http_endpoint(
+            url=f"https://{smoke_host}/",
+            timeout_seconds=timeout_seconds,
+            host_header=host_header,
+            verify_tls=verify_tls,
+        )
+    return result
 
 
 def _shared_env_has_app_key(env_file: Path) -> bool:
@@ -1204,6 +1251,7 @@ def create_site(
     nginx_snapshot = capture_nginx_site_snapshot(domain) if atomic and deploy and nginx_enabled else None
     ssl_result: dict | None = None
     nginx_result: dict | None = None
+    smoke_checks: dict[str, dict[str, Any]] | None = None
     db_result: dict | None = None
     env_sync_result: dict | None = None
     bootstrap_reports: list[dict[str, Any]] = []
@@ -1425,6 +1473,7 @@ def create_site(
                     "bootstrap_reports": bootstrap_reports,
                     "verify_reports": verify_reports,
                     "health_check": health_check,
+                    "smoke_checks": smoke_checks,
                 }
                 save_metadata(paths.metadata, metadata)
                 write_release_manifest(
@@ -1443,6 +1492,7 @@ def create_site(
                             "verify": verify_reports,
                         },
                         "health_check": health_check,
+                        "smoke_checks": smoke_checks,
                     },
                 )
                 if nginx_enabled:
@@ -1484,6 +1534,24 @@ def create_site(
                         https_enabled=True,
                         force=True,
                     )
+            if deploy and nginx_enabled:
+                https_enabled = bool(
+                    ssl_result is not None or (nginx_result is not None and nginx_result.get("https_enabled"))
+                )
+                smoke_checks = _run_create_site_smoke_checks(
+                    app_ctx=app_ctx,
+                    domain=domain,
+                    https_enabled=https_enabled,
+                )
+                for scheme, probe in smoke_checks.items():
+                    if probe.get("status") == "failed":
+                        app_ctx.emit_output(
+                            "warn",
+                            f"Site smoke {scheme.upper()} probe failed: {probe.get('detail', 'unknown')}",
+                            domain=domain,
+                            scheme=scheme,
+                            smoke_probe=probe,
+                        )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
@@ -1549,7 +1617,13 @@ def create_site(
         event_type="create.site.completed",
         domain=domain,
         message="Create site completed.",
-        metadata={"deploy": deploy, "runtime": runtime_plan, "nginx": nginx_enabled, "db": db_result},
+        metadata={
+            "deploy": deploy,
+            "runtime": runtime_plan,
+            "nginx": nginx_enabled,
+            "db": db_result,
+            "smoke_checks": smoke_checks,
+        },
     )
     app_ctx.emit_output(
         "ok",
@@ -1563,6 +1637,7 @@ def create_site(
         db_result=db_result,
         env_sync_result=env_sync_result,
         bootstrap_reports=bootstrap_reports,
+        smoke_checks=smoke_checks,
     )
     _emit_create_site_summary(
         app_ctx,
@@ -1578,4 +1653,5 @@ def create_site(
         bootstrap_reports=bootstrap_reports,
         bootstrap_status=bootstrap_status,
         permissions_result=permissions_result,
+        smoke_checks=smoke_checks,
     )

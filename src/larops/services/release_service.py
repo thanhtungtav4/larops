@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -39,6 +40,11 @@ _SUPPORTED_AUTO_FRONTEND_PACKAGE_MANAGER = "npm"
 _FRONTEND_BUILD_HINT_RE = re.compile(
     r"(?:\b(?:npm|pnpm|yarn|bun)\b.*\bbuild\b)|(?:\bvite\b.*\bbuild\b)|build-assets|asset-build|frontend-build"
 )
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
 
 
 def _remove_path(path: Path) -> None:
@@ -460,6 +466,46 @@ def run_http_health_check(
         "http_status": last_status,
         "detail": last_error,
     }
+
+
+def probe_http_endpoint(
+    *,
+    url: str,
+    timeout_seconds: int,
+    host_header: str | None = None,
+    verify_tls: bool = True,
+) -> dict[str, Any]:
+    request = urllib.request.Request(url, method="GET")
+    if host_header:
+        request.add_header("Host", host_header)
+
+    handlers: list[urllib.request.BaseHandler] = [_NoRedirectHandler()]
+    if url.startswith("https://") and not verify_tls:
+        handlers.append(urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
+    opener = urllib.request.build_opener(*handlers)
+
+    try:
+        with opener.open(request, timeout=max(1, timeout_seconds)) as response:
+            return {
+                "checked": True,
+                "status": "ok",
+                "url": url,
+                "http_status": int(response.status),
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "checked": True,
+            "status": "ok",
+            "url": url,
+            "http_status": int(exc.code),
+        }
+    except urllib.error.URLError as exc:
+        return {
+            "checked": True,
+            "status": "failed",
+            "url": url,
+            "detail": str(exc.reason),
+        }
 
 
 def refresh_runtime_after_activate(

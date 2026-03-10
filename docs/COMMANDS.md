@@ -133,7 +133,8 @@ When `larops create site <domain>` runs:
    - run `migrate`, `package:discover`, and `optimize*` only when the app database already appears to have schema
    - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
    - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` to skip Laravel bootstrap on first create
-9. If a previous failed create already wrote app metadata, rerun with `--force`.
+9. After Nginx provisioning, `create site` prints lightweight smoke results such as `smoke http: 301` and `smoke https: 200`.
+10. If a previous failed create already wrote app metadata, rerun with `--force`.
 
 `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally want an off-host database.
 

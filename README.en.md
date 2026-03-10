@@ -186,6 +186,7 @@ What `create site` does on a fresh host:
   - if LarOps cannot determine safe DB context, it skips Laravel bootstrap instead of forcing artisan commands on first create
   - use `--app-bootstrap-mode eager` for apps known to boot safely on first create
   - use `--app-bootstrap-mode skip` when provider boot depends on schema or seeded settings
+- After managed Nginx provisioning, `create site` prints lightweight smoke results such as `smoke http: 301` and `smoke https: 200` so you can see the live HTTP/HTTPS status immediately.
 - `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
 

@@ -205,6 +205,7 @@ larops create site example.com \
   - nếu LarOps không xác định được DB context an toàn, nó sẽ bỏ bootstrap Laravel thay vì ép chạy artisan ở lần create đầu
   - dùng `--app-bootstrap-mode eager` cho app bạn biết chắc boot an toàn ngay từ lần create đầu
   - dùng `--app-bootstrap-mode skip` nếu provider boot phụ thuộc schema hoặc dữ liệu seed ban đầu
+- Sau khi provision Nginx managed site, `create site` sẽ in smoke result nhẹ như `smoke http: 301` và `smoke https: 200` để bạn thấy ngay trạng thái HTTP/HTTPS thực tế.
 - `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
 
