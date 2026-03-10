@@ -718,6 +718,9 @@ def test_create_site_apply_reports_smoke_statuses(tmp_path: Path, monkeypatch) -
     assert result.exit_code == 0
     assert "smoke http: 301" in result.stdout
     assert "smoke https: 200" in result.stdout
+    metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
+    assert metadata["last_deploy"]["smoke_checks"]["http"]["http_status"] == 301
+    assert metadata["last_deploy"]["smoke_checks"]["https"]["http_status"] == 200
 
 
 def test_create_site_plan_with_db_exposes_db_provision_plan(tmp_path: Path) -> None:

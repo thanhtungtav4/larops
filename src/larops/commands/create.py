@@ -1461,40 +1461,6 @@ def create_site(
                     timeout_seconds=app_ctx.config.deploy.verify_timeout_seconds,
                 )
                 deleted_releases = prune_releases(paths, app_ctx.config.deploy.keep_releases)
-                metadata = load_metadata(paths.metadata)
-                metadata["last_deploy"] = {
-                    "release_id": release_id,
-                    "ref": ref,
-                    "deployed_at": datetime.now(UTC).isoformat(),
-                    "source": str(source_path),
-                    "build_reports": build_reports,
-                    "pre_activate_reports": pre_activate_reports,
-                    "post_activate_reports": post_activate_reports,
-                    "bootstrap_reports": bootstrap_reports,
-                    "verify_reports": verify_reports,
-                    "health_check": health_check,
-                    "smoke_checks": smoke_checks,
-                }
-                save_metadata(paths.metadata, metadata)
-                write_release_manifest(
-                    release_dir,
-                    {
-                        "status": "deployed",
-                        "release_id": release_id,
-                        "ref": ref,
-                        "source": str(source_path),
-                        "deployed_at": datetime.now(UTC).isoformat(),
-                        "phase_reports": {
-                            "build": build_reports,
-                            "pre_activate": pre_activate_reports,
-                            "post_activate": post_activate_reports,
-                            "app_bootstrap": bootstrap_reports,
-                            "verify": verify_reports,
-                        },
-                        "health_check": health_check,
-                        "smoke_checks": smoke_checks,
-                    },
-                )
                 if nginx_enabled:
                     current_path = paths.current.resolve(strict=True)
                     nginx_result = apply_nginx_site_config(
@@ -1552,6 +1518,41 @@ def create_site(
                             scheme=scheme,
                             smoke_probe=probe,
                         )
+            if deploy:
+                metadata = load_metadata(paths.metadata)
+                metadata["last_deploy"] = {
+                    "release_id": release_id,
+                    "ref": ref,
+                    "deployed_at": datetime.now(UTC).isoformat(),
+                    "source": str(source_path),
+                    "build_reports": build_reports,
+                    "pre_activate_reports": pre_activate_reports,
+                    "post_activate_reports": post_activate_reports,
+                    "bootstrap_reports": bootstrap_reports,
+                    "verify_reports": verify_reports,
+                    "health_check": health_check,
+                    "smoke_checks": smoke_checks,
+                }
+                save_metadata(paths.metadata, metadata)
+                write_release_manifest(
+                    release_dir,
+                    {
+                        "status": "deployed",
+                        "release_id": release_id,
+                        "ref": ref,
+                        "source": str(source_path),
+                        "deployed_at": datetime.now(UTC).isoformat(),
+                        "phase_reports": {
+                            "build": build_reports,
+                            "pre_activate": pre_activate_reports,
+                            "post_activate": post_activate_reports,
+                            "app_bootstrap": bootstrap_reports,
+                            "verify": verify_reports,
+                        },
+                        "health_check": health_check,
+                        "smoke_checks": smoke_checks,
+                    },
+                )
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
