@@ -87,6 +87,36 @@ larops create site example.com \
   --apply
 ```
 
+### Clone from Git and force eager Laravel bootstrap
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode eager \
+  --apply
+```
+
+### Clone from Git and skip Laravel bootstrap on first create
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode skip \
+  --apply
+```
+
+### Clone from Git and issue Let's Encrypt in the same flow
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  -le \
+  --le-email ops@example.com \
+  --apply
+```
+
 ## `create site` Source Rules
 
 When `larops create site <domain>` runs:

@@ -1,6 +1,8 @@
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
+
 from larops.config import DeployConfig
 from larops.services.app_lifecycle import get_app_paths, initialize_app
 from larops.services.release_service import (
@@ -9,6 +11,8 @@ from larops.services.release_service import (
     build_rollback_phase_commands,
     resolve_build_commands_for_release,
     run_release_commands,
+    validate_frontend_build_requirements_for_release,
+    ReleaseServiceError,
 )
 
 
@@ -128,6 +132,22 @@ def test_resolve_build_commands_for_release_skips_vite_auto_build_when_explicit_
     assert commands == ["npm run build", "echo done"]
 
 
+def test_resolve_build_commands_for_release_skips_vite_auto_build_for_wrapper_build_command(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    (release_dir / "public" / "build").mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+    config = DeployConfig()
+
+    commands = resolve_build_commands_for_release(
+        config=config,
+        release_dir=release_dir,
+        commands=["./scripts/build-assets.sh"],
+    )
+    assert commands == ["./scripts/build-assets.sh"]
+
+
 def test_resolve_build_commands_for_release_skips_when_vendor_exists(tmp_path: Path) -> None:
     release_dir = tmp_path / "release"
     (release_dir / "vendor").mkdir(parents=True, exist_ok=True)
@@ -154,6 +174,54 @@ def test_resolve_build_commands_for_release_combines_composer_and_vite_steps(tmp
         "npm ci --no-audit --no-fund",
         "npm run build",
     ]
+
+
+def test_validate_frontend_build_requirements_for_release_rejects_pnpm_projects(tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text('{"scripts":{"build":"vite build"}}', encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+    (release_dir / "pnpm-lock.yaml").write_text("lockfileVersion: 9.0", encoding="utf-8")
+
+    with pytest.raises(ReleaseServiceError, match="npm-managed projects only"):
+        validate_frontend_build_requirements_for_release(release_dir=release_dir, commands=[])
+
+
+def test_validate_frontend_build_requirements_for_release_rejects_node_engine_mismatch(monkeypatch, tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text(
+        '{"scripts":{"build":"vite build"},"engines":{"node":">=22.0.0"}}',
+        encoding="utf-8",
+    )
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "larops.services.release_service.run_command",
+        lambda *args, **kwargs: CompletedProcess(["node", "--version"], 0, stdout="v20.11.1\n", stderr=""),
+    )
+
+    with pytest.raises(ReleaseServiceError, match="does not satisfy package.json engines.node"):
+        validate_frontend_build_requirements_for_release(release_dir=release_dir, commands=[])
+
+
+def test_validate_frontend_build_requirements_for_release_accepts_supported_node(monkeypatch, tmp_path: Path) -> None:
+    release_dir = tmp_path / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    (release_dir / "package.json").write_text(
+        '{"scripts":{"build":"vite build"},"engines":{"node":"^20.19.0 || >=22.12.0"}}',
+        encoding="utf-8",
+    )
+    (release_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (release_dir / "vite.config.js").write_text("export default {}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "larops.services.release_service.run_command",
+        lambda *args, **kwargs: CompletedProcess(["node", "--version"], 0, stdout="v20.19.3\n", stderr=""),
+    )
+
+    validate_frontend_build_requirements_for_release(release_dir=release_dir, commands=[])
 
 
 def test_prepare_release_candidate_bootstraps_laravel_runtime_directories(tmp_path: Path) -> None:

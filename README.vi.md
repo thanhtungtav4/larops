@@ -204,6 +204,33 @@ larops create site example.com \
 - `bootstrap init --profile small-vps` giờ có local `data` stack theo mặc định. Chỉ dùng `--no-data` nếu bạn cố ý để database ở máy khác.
 - Nếu lần create trước đã ghi `state/apps/<domain>.json` nhưng chưa hoàn tất, hãy chạy lại với `--force`.
 
+Ví dụ create site thực dụng:
+
+```bash
+# source local
+larops create site example.com --source /var/www/source/example.com --apply
+
+# clone từ git và provision DB
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --apply
+
+# app biết chắc boot an toàn ngay lần create đầu
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode eager \
+  --apply
+
+# provider boot phụ thuộc schema hoặc seed data
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode skip \
+  --apply
+```
+
 Local development:
 
 ```bash

@@ -185,6 +185,33 @@ What `create site` does on a fresh host:
 - `bootstrap init --profile small-vps` includes the local `data` stack by default. Use `--no-data` only if you intentionally keep the database off-host.
 - If a previous failed create already wrote `state/apps/<domain>.json`, rerun with `--force`.
 
+Practical create examples:
+
+```bash
+# local source
+larops create site example.com --source /var/www/source/example.com --apply
+
+# clone from git and provision DB
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --apply
+
+# known-safe app: force eager Laravel bootstrap
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode eager \
+  --apply
+
+# provider boot depends on schema or seed data
+larops create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode skip \
+  --apply
+```
+
 Install pinned version after a GitHub release exists:
 
 ```bash

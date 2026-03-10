@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 import urllib.error
@@ -32,6 +33,10 @@ _VITE_CONFIG_FILES = (
     "vite.config.ts",
     "vite.config.mjs",
     "vite.config.cjs",
+)
+_SUPPORTED_AUTO_FRONTEND_PACKAGE_MANAGER = "npm"
+_FRONTEND_BUILD_HINT_RE = re.compile(
+    r"(?:\b(?:npm|pnpm|yarn|bun)\b.*\bbuild\b)|(?:\bvite\b.*\bbuild\b)|build-assets|asset-build|frontend-build"
 )
 
 
@@ -131,6 +136,28 @@ def _npm_install_command(release_dir: Path) -> str:
     return "npm install --no-audit --no-fund"
 
 
+def _read_package_json(release_dir: Path) -> dict[str, Any] | None:
+    package_json = release_dir / "package.json"
+    if not package_json.exists():
+        return None
+    return json.loads(package_json.read_text(encoding="utf-8"))
+
+
+def _detect_frontend_package_manager(release_dir: Path, package_json: dict[str, Any] | None) -> str:
+    package_manager_raw = ""
+    if isinstance(package_json, dict):
+        package_manager_raw = str(package_json.get("packageManager") or "").strip().lower()
+    if package_manager_raw:
+        return package_manager_raw.split("@", 1)[0]
+    if (release_dir / "pnpm-lock.yaml").exists():
+        return "pnpm"
+    if (release_dir / "yarn.lock").exists():
+        return "yarn"
+    if (release_dir / "bun.lockb").exists() or (release_dir / "bun.lock").exists():
+        return "bun"
+    return "npm"
+
+
 def _should_auto_build_frontend(release_dir: Path) -> bool:
     if not (release_dir / "package.json").exists():
         return False
@@ -142,9 +169,121 @@ def _should_auto_build_frontend(release_dir: Path) -> bool:
 def _has_explicit_frontend_build(commands: list[str]) -> bool:
     normalized = [command.strip().lower() for command in commands if command.strip()]
     for command in normalized:
-        if "npm run build" in command or "vite build" in command:
+        if _FRONTEND_BUILD_HINT_RE.search(command):
             return True
     return False
+
+
+def _parse_semver_tuple(raw: str) -> tuple[int, int, int]:
+    cleaned = raw.strip().lstrip("v")
+    parts = cleaned.split(".")
+    numbers: list[int] = []
+    for part in parts[:3]:
+        match = re.match(r"(\d+)", part)
+        if not match:
+            break
+        numbers.append(int(match.group(1)))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return tuple(numbers[:3])
+
+
+def _compare_semver(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
+    if left < right:
+        return -1
+    if left > right:
+        return 1
+    return 0
+
+
+def _token_satisfies_semver(version: tuple[int, int, int], token: str) -> bool:
+    normalized = token.strip()
+    if not normalized:
+        return True
+    if normalized.startswith("^"):
+        floor = _parse_semver_tuple(normalized[1:])
+        ceil = (floor[0] + 1, 0, 0)
+        return _compare_semver(version, floor) >= 0 and _compare_semver(version, ceil) < 0
+    if normalized.startswith("~"):
+        floor = _parse_semver_tuple(normalized[1:])
+        ceil = (floor[0], floor[1] + 1, 0)
+        return _compare_semver(version, floor) >= 0 and _compare_semver(version, ceil) < 0
+    for operator in (">=", "<=", ">", "<", "="):
+        if normalized.startswith(operator):
+            target = _parse_semver_tuple(normalized[len(operator) :])
+            comparison = _compare_semver(version, target)
+            if operator == ">=":
+                return comparison >= 0
+            if operator == "<=":
+                return comparison <= 0
+            if operator == ">":
+                return comparison > 0
+            if operator == "<":
+                return comparison < 0
+            return comparison == 0
+    wildcard = normalized.replace("*", "x")
+    if "x" in wildcard:
+        version_parts = normalized.split(".")
+        actual_parts = [version[0], version[1], version[2]]
+        for index, part in enumerate(version_parts[:3]):
+            cleaned = part.strip().lower()
+            if cleaned in {"x", "*"} or cleaned == "":
+                return True
+            if actual_parts[index] != int(cleaned):
+                return False
+        return True
+    target = _parse_semver_tuple(normalized)
+    if normalized.count(".") < 2:
+        prefix = tuple(int(part) for part in normalized.split(".") if part)
+        return version[: len(prefix)] == prefix
+    return version == target
+
+
+def _node_version_satisfies(version_raw: str, requirement: str) -> bool:
+    requirement_text = requirement.strip()
+    if not requirement_text:
+        return True
+    version = _parse_semver_tuple(version_raw)
+    for clause in requirement_text.split("||"):
+        tokens = [token for token in clause.strip().split() if token]
+        if tokens and all(_token_satisfies_semver(version, token) for token in tokens):
+            return True
+    return False
+
+
+def validate_frontend_build_requirements_for_release(
+    *,
+    release_dir: Path,
+    commands: list[str],
+) -> None:
+    if not _should_auto_build_frontend(release_dir):
+        return
+    if _has_explicit_frontend_build(commands):
+        return
+    package_json = _read_package_json(release_dir)
+    package_manager = _detect_frontend_package_manager(release_dir, package_json)
+    if package_manager != _SUPPORTED_AUTO_FRONTEND_PACKAGE_MANAGER:
+        raise ReleaseServiceError(
+            "Frontend auto-build currently supports npm-managed projects only. "
+            f"Detected package manager: {package_manager}. Configure deploy.asset_commands explicitly."
+        )
+    node_requirement = ""
+    if isinstance(package_json, dict):
+        engines = package_json.get("engines")
+        if isinstance(engines, dict):
+            node_requirement = str(engines.get("node") or "").strip()
+    if not node_requirement:
+        return
+    try:
+        completed = run_command(["node", "--version"], check=True)
+    except ShellCommandError as exc:
+        raise ReleaseServiceError(f"Node.js is required for frontend auto-build but is unavailable: {exc}") from exc
+    node_version = (completed.stdout or "").strip()
+    if not _node_version_satisfies(node_version, node_requirement):
+        raise ReleaseServiceError(
+            f"Node.js {node_version or 'unknown'} does not satisfy package.json engines.node requirement "
+            f"'{node_requirement}'. Install a compatible Node runtime or configure deploy.asset_commands explicitly."
+        )
 
 
 def resolve_build_commands_for_release(*, config: DeployConfig, release_dir: Path, commands: list[str]) -> list[str]:

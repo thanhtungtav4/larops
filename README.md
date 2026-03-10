@@ -56,6 +56,64 @@ larops bootstrap init --profile small-vps --apply
 larops create site example.com --profile small-vps --apply
 ```
 
+## Create Site Examples
+
+Existing local source:
+
+```bash
+larops create site example.com \
+  --source /var/www/source/example.com \
+  --apply
+```
+
+Clone from Git and reuse an existing database:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/app.git \
+  --force \
+  --apply
+```
+
+Clone from Git and let LarOps provision the database:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/app.git \
+  --with-db \
+  --apply
+```
+
+Known-safe Laravel app: force eager bootstrap on first create:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/app.git \
+  --with-db \
+  --app-bootstrap-mode eager \
+  --apply
+```
+
+App providers depend on schema or seeded settings: skip Laravel bootstrap on first create:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/app.git \
+  --with-db \
+  --app-bootstrap-mode skip \
+  --apply
+```
+
+Create site and issue Let's Encrypt in the same flow:
+
+```bash
+larops create site example.com \
+  --git-url https://github.com/acme/app.git \
+  -le \
+  --le-email ops@example.com \
+  --apply
+```
+
 ## Command Overview
 
 | Group | Purpose | Example |

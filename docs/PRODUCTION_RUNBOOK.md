@@ -218,6 +218,16 @@ sudo larops --config /etc/larops/larops.yaml create site example.com \
   --git-url https://github.com/acme/example-app.git \
   --with-db \
   --apply
+sudo larops --config /etc/larops/larops.yaml create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode eager \
+  --apply
+sudo larops --config /etc/larops/larops.yaml create site example.com \
+  --git-url https://github.com/acme/example-app.git \
+  --with-db \
+  --app-bootstrap-mode skip \
+  --apply
 sudo larops --config /etc/larops/larops.yaml create site example.com -le --le-email ops@example.com --apply
 sudo larops --config /etc/larops/larops.yaml ssl auto-renew enable --apply
 sudo larops --config /etc/larops/larops.yaml site create example.com -a
@@ -239,6 +249,10 @@ Source preparation rules:
   - it writes `APP_KEY` directly into `shared/.env` when missing
   - it only runs `migrate`, `package:discover`, and `optimize*` when the app database already appears to have schema
   - use `--app-bootstrap-mode eager` for known-safe apps, or `--app-bootstrap-mode skip` on fresh apps whose providers read DB-backed settings during boot
+- Practical rule:
+  - `auto`: default, safest general case
+  - `eager`: use only when you know provider boot does not depend on missing tables or seed data
+  - `skip`: use when first-create must stop before any Laravel artisan bootstrap
 - If a previous failed create already wrote app metadata, rerun with `--force`.
 
 For small VPS hosts, remember:
