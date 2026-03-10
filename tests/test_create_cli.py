@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from larops.cli import app
 from larops.commands.create import _resolve_app_bootstrap_strategy
 from larops.services.nginx_site_service import NginxSiteServiceError
+from larops.services.release_service import ReleaseServiceError
 from larops.services.ssl_service import SslServiceError
 
 runner = CliRunner()
@@ -964,6 +965,54 @@ def test_create_site_force_recovers_db_env_from_secret_files_when_metadata_was_l
     assert "DB_HOST=127.0.0.1" in env_body
     assert "DB_USERNAME=demo_test" in env_body
     assert "DB_PASSWORD=secret-456" in env_body
+
+
+def test_create_site_force_preserves_existing_last_deploy_when_new_run_fails(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    metadata_path = tmp_path / "state" / "apps" / "demo.test.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "domain": "demo.test",
+                "php": "8.4",
+                "db": "mysql",
+                "ssl": True,
+                "created_at": "2026-03-10T00:00:00+00:00",
+                "last_deploy": {
+                    "release_id": "old-release",
+                    "ref": "main",
+                    "deployed_at": "2026-03-10T00:10:00+00:00",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_build(**_kwargs):
+        raise ReleaseServiceError("boom")
+
+    monkeypatch.setattr("larops.commands.create.run_release_commands", fail_build)
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--force",
+            "--apply",
+        ],
+    )
+
+    assert result.exit_code == 2
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["created_at"] == "2026-03-10T00:00:00+00:00"
+    assert metadata["last_deploy"]["release_id"] == "old-release"
 
 
 def test_create_site_force_with_db_allows_existing_database_adoption(tmp_path: Path, monkeypatch) -> None:

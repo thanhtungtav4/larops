@@ -345,6 +345,12 @@ def _preserved_site_metadata(paths: Any) -> dict[str, Any]:
     except AppLifecycleError:
         return {}
     preserved: dict[str, Any] = {}
+    created_at = existing.get("created_at")
+    if isinstance(created_at, str) and created_at.strip():
+        preserved["created_at"] = created_at
+    last_deploy = existing.get("last_deploy")
+    if isinstance(last_deploy, dict):
+        preserved["last_deploy"] = last_deploy
     for key in ("database_provision", "env_sync"):
         value = existing.get(key)
         if isinstance(value, dict):
