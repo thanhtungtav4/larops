@@ -116,9 +116,20 @@ def restore_nginx_site_snapshot(snapshot: NginxSiteSnapshot, *, reload_after_res
 
 
 def _resolve_document_root(current_path: Path) -> Path:
-    public_path = current_path / "public"
+    stable_current = _stable_current_path(current_path)
+    public_path = stable_current / "public"
     if public_path.exists():
         return public_path
+    return stable_current
+
+
+def _stable_current_path(current_path: Path) -> Path:
+    if current_path.name == "current":
+        return current_path
+
+    if current_path.parent.name == "releases":
+        return current_path.parent.parent / "current"
+
     return current_path
 
 
@@ -271,6 +282,13 @@ def _validate_existing_config(paths: NginxSitePaths, *, force: bool) -> None:
         f"Nginx site config already exists and is not managed by LarOps: {paths.server_config_file}. "
         "Use --force to overwrite deliberately."
     )
+
+
+def is_managed_nginx_site_config(domain: str) -> bool:
+    paths = resolve_nginx_site_paths(domain)
+    if not paths.server_config_file.exists():
+        return False
+    return paths.server_config_file.read_text(encoding="utf-8").startswith("# Managed by LarOps")
 
 
 def _reload_nginx() -> None:

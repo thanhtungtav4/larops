@@ -423,6 +423,42 @@ def test_deploy_records_writable_permissions_metadata(tmp_path: Path) -> None:
     assert metadata["last_deploy"]["permissions"]["writable_mode"] == "0o775"
 
 
+def test_deploy_rerenders_managed_nginx_site(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    source = make_source(tmp_path, "src-one", "release-one")
+
+    assert runner.invoke(app, ["--config", str(config), "app", "create", "demo.test", "--apply"]).exit_code == 0
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("larops.commands.app.is_managed_nginx_site_config", lambda _domain: True)
+
+    def fake_apply_nginx_site_config(*, domain: str, current_path: Path, php_version: str, https_enabled: bool, force: bool):
+        captured.update(
+            {
+                "domain": domain,
+                "current_path": str(current_path),
+                "php_version": php_version,
+                "https_enabled": https_enabled,
+                "force": force,
+            }
+        )
+        return {"document_root": f"{current_path.parent.parent / 'current' / 'public'}"}
+
+    monkeypatch.setattr("larops.commands.app.apply_nginx_site_config", fake_apply_nginx_site_config)
+
+    deploy = runner.invoke(
+        app,
+        ["--config", str(config), "app", "deploy", "demo.test", "--source", str(source), "--apply"],
+    )
+    assert deploy.exit_code == 0
+    assert captured["domain"] == "demo.test"
+    assert captured["php_version"] == "8.3"
+    assert captured["https_enabled"] is False
+    metadata = json.loads((tmp_path / "state" / "apps" / "demo.test.json").read_text(encoding="utf-8"))
+    assert metadata["last_deploy"]["nginx"]["document_root"].endswith("/current/public")
+
+
 def test_deploy_rolls_back_on_health_check_failure(tmp_path: Path, monkeypatch) -> None:
     config_file = tmp_path / "larops.yaml"
     config_file.write_text(

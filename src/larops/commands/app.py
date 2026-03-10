@@ -33,7 +33,12 @@ from larops.services.app_lifecycle import (
 from larops.services.permissions_service import ensure_site_writable_permissions
 from larops.services.permissions_service import PermissionServiceError
 from larops.services.env_file_service import EnvFileServiceError
-from larops.services.nginx_site_service import resolve_nginx_site_paths
+from larops.services.nginx_site_service import (
+    NginxSiteServiceError,
+    apply_nginx_site_config,
+    is_managed_nginx_site_config,
+    resolve_nginx_site_paths,
+)
 from larops.services.release_service import (
     ReleaseServiceError,
     build_deploy_phase_commands,
@@ -397,6 +402,7 @@ def deploy(
     release_id: str | None = None
     release_dir: Path | None = None
     permissions_result: dict | None = None
+    nginx_result: dict | None = None
     try:
         with CommandLock(_lock_name(domain)):
             metadata = load_metadata(paths.metadata)
@@ -440,6 +446,14 @@ def deploy(
                 owner=app_ctx.config.systemd.user,
                 group=app_ctx.config.systemd.user,
             )
+            if is_managed_nginx_site_config(domain):
+                nginx_result = apply_nginx_site_config(
+                    domain=domain,
+                    current_path=current_path,
+                    php_version=str(metadata.get("php") or "8.3"),
+                    https_enabled=bool(metadata.get("ssl")) or default_cert_file(domain).exists(),
+                    force=False,
+                )
             post_activate_reports = run_release_commands(
                 workdir=current_path,
                 phase="post-activate",
@@ -507,6 +521,7 @@ def deploy(
                 "health_check": health_check,
                 "runtime_refresh": runtime_refresh,
                 "permissions": permissions_result,
+                "nginx": nginx_result,
             }
             save_metadata(paths.metadata, metadata)
             write_release_manifest(
@@ -531,7 +546,7 @@ def deploy(
     except CommandLockError as exc:
         app_ctx.emit_output("error", str(exc))
         raise typer.Exit(code=5) from exc
-    except (AppLifecycleError, ReleaseServiceError) as exc:
+    except (AppLifecycleError, ReleaseServiceError, NginxSiteServiceError) as exc:
         if release_dir is not None and release_dir.exists():
             write_release_manifest(
                 release_dir,

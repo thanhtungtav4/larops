@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from larops.services.nginx_site_service import render_nginx_site_config, resolve_nginx_site_paths
+from larops.services.nginx_site_service import (
+    _resolve_document_root,
+    render_nginx_site_config,
+    resolve_nginx_site_paths,
+)
 
 
 def test_resolve_nginx_site_paths_defaults_to_debian_layout(monkeypatch) -> None:
@@ -45,3 +49,15 @@ def test_render_nginx_site_config_https_redirects_and_loads_cert_paths() -> None
     assert "listen 443 ssl http2;" in body
     assert "/etc/letsencrypt/live/example.test/fullchain.pem" in body
     assert "/etc/letsencrypt/live/example.test/privkey.pem" in body
+
+
+def test_resolve_document_root_prefers_current_symlink_path_for_release_targets(tmp_path: Path) -> None:
+    root = tmp_path / "example.test"
+    releases = root / "releases"
+    release = releases / "r1"
+    current = root / "current"
+    (release / "public").mkdir(parents=True)
+    current.symlink_to(release)
+
+    resolved = _resolve_document_root(release)
+    assert resolved == current / "public"
