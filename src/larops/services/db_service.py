@@ -604,6 +604,7 @@ def provision_database(
     credential_file: Path | None = None,
     password_file: Path | None = None,
     admin_credential_file: Path | None = None,
+    allow_existing: bool = False,
 ) -> dict:
     normalized_engine = normalize_db_engine(engine)
     db_name = normalize_database_name(database)
@@ -620,6 +621,7 @@ def provision_database(
     resolved_password_file = password_file or default_password_file(state_path, domain, engine=normalized_engine)
 
     try:
+        adopted_existing = False
         if normalized_engine == "mysql":
             database_exists = _mysql_scalar_for_admin(
                 admin_credential_file=admin_credential_file,
@@ -632,16 +634,28 @@ def provision_database(
                     f"WHERE user = '{db_user}' AND host = '{_sql_string(app_host)}';"
                 ),
             )
-            if database_exists:
-                raise DbServiceError(f"Database already exists: {db_name}")
-            if user_exists:
+            if (database_exists or user_exists) and not allow_existing:
+                if database_exists:
+                    raise DbServiceError(f"Database already exists: {db_name}")
                 raise DbServiceError(f"Database user already exists: {db_user}@{app_host}")
-            sql = (
-                f"CREATE DATABASE `{db_name}`;"
-                f" CREATE USER '{db_user}'@'{_sql_string(app_host)}' IDENTIFIED BY '{_sql_string(password)}';"
-                f" GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'{_sql_string(app_host)}';"
-                " FLUSH PRIVILEGES;"
-            )
+
+            statements: list[str] = []
+            if not database_exists:
+                statements.append(f"CREATE DATABASE `{db_name}`;")
+            if not user_exists:
+                statements.append(
+                    f"CREATE USER '{db_user}'@'{_sql_string(app_host)}' IDENTIFIED BY '{_sql_string(password)}';"
+                )
+            elif allow_existing:
+                statements.append(
+                    f"ALTER USER '{db_user}'@'{_sql_string(app_host)}' IDENTIFIED BY '{_sql_string(password)}';"
+                )
+                adopted_existing = True
+            if database_exists:
+                adopted_existing = True
+            statements.append(f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'{_sql_string(app_host)}';")
+            statements.append("FLUSH PRIVILEGES;")
+            sql = " ".join(statements)
             run_command(_mysql_command_for_admin(admin_credential_file=admin_credential_file, sql=sql), check=True)
             write_mysql_credentials(
                 credential_file=resolved_credential_file,
@@ -661,26 +675,40 @@ def provision_database(
                 database=db_name,
                 sql=f"SELECT COUNT(*) FROM pg_roles WHERE rolname = '{db_user}';",
             )
-            if database_exists:
-                raise DbServiceError(f"Database already exists: {db_name}")
-            if user_exists:
+            if (database_exists or user_exists) and not allow_existing:
+                if database_exists:
+                    raise DbServiceError(f"Database already exists: {db_name}")
                 raise DbServiceError(f"Database user already exists: {db_user}")
-            run_command(
-                _postgres_command_for_admin(
-                    admin_credential_file=admin_credential_file,
-                    database=db_name,
-                    sql=f"CREATE ROLE \"{db_user}\" LOGIN PASSWORD '{_sql_string(password)}';",
-                ),
-                check=True,
-            )
-            run_command(
-                _postgres_command_for_admin(
-                    admin_credential_file=admin_credential_file,
-                    database=db_name,
-                    sql=f"CREATE DATABASE \"{db_name}\" OWNER \"{db_user}\";",
-                ),
-                check=True,
-            )
+            if not user_exists:
+                run_command(
+                    _postgres_command_for_admin(
+                        admin_credential_file=admin_credential_file,
+                        database=db_name,
+                        sql=f"CREATE ROLE \"{db_user}\" LOGIN PASSWORD '{_sql_string(password)}';",
+                    ),
+                    check=True,
+                )
+            elif allow_existing:
+                run_command(
+                    _postgres_command_for_admin(
+                        admin_credential_file=admin_credential_file,
+                        database=db_name,
+                        sql=f"ALTER ROLE \"{db_user}\" WITH LOGIN PASSWORD '{_sql_string(password)}';",
+                    ),
+                    check=True,
+                )
+                adopted_existing = True
+            if not database_exists:
+                run_command(
+                    _postgres_command_for_admin(
+                        admin_credential_file=admin_credential_file,
+                        database=db_name,
+                        sql=f"CREATE DATABASE \"{db_name}\" OWNER \"{db_user}\";",
+                    ),
+                    check=True,
+                )
+            else:
+                adopted_existing = True
             write_postgres_credentials(
                 credential_file=resolved_credential_file,
                 user=db_user,
@@ -693,7 +721,7 @@ def provision_database(
 
     write_password_secret(password_file=resolved_password_file, password=password)
     return {
-        "status": "ok",
+        "status": "adopted" if adopted_existing else "ok",
         "domain": domain,
         "engine": normalized_engine,
         "database": db_name,

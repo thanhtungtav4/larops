@@ -1260,6 +1260,7 @@ def create_site(
                         if db_provision_plan["admin_credential_file"] is not None
                         else None
                     ),
+                    allow_existing=force,
                 )
                 db_provisioned = True
                 metadata = load_metadata(paths.metadata)

@@ -922,6 +922,52 @@ def test_create_site_force_recovers_db_env_from_secret_files_when_metadata_was_l
     assert "DB_PASSWORD=secret-456" in env_body
 
 
+def test_create_site_force_with_db_allows_existing_database_adoption(tmp_path: Path, monkeypatch) -> None:
+    config = write_config(tmp_path)
+    _ = make_source(tmp_path, "demo.test")
+    captured: dict[str, object] = {}
+
+    def fake_provision_database(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "adopted",
+            "domain": "demo.test",
+            "engine": kwargs["engine"],
+            "database": kwargs["database"],
+            "user": kwargs["user"],
+            "host": kwargs["app_host"],
+            "port": kwargs["app_port"],
+            "credential_file": str(kwargs["credential_file"]),
+            "password_file": str(kwargs["password_file"]),
+            "admin_credential_file": None,
+            "provisioned_at": "2026-03-10T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("larops.commands.create.provision_database", fake_provision_database)
+    monkeypatch.setattr("larops.commands.create.run_release_commands", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        "larops.commands.create.run_http_health_check",
+        lambda **_kwargs: {"enabled": False, "checked": False, "status": "skipped"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "create",
+            "site",
+            "demo.test",
+            "--with-db",
+            "--force",
+            "--apply",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["allow_existing"] is True
+
+
 def test_site_create_apply_short_flag(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     _ = make_source(tmp_path, "demo.test")

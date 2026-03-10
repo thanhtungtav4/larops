@@ -17,6 +17,7 @@ from larops.services.db_service import (
     _mysql_scalar_query,
     build_backup_command,
     build_restore_command,
+    provision_database,
 )
 
 runner = CliRunner()
@@ -369,6 +370,49 @@ def test_mysql_scalar_query_uses_no_header_flags(tmp_path: Path, monkeypatch) ->
     assert _mysql_scalar_query(credential_file=secret, sql="SELECT COUNT(*) FROM test;") == 1
     assert "--defaults-extra-file=" in str(captured["command"][2])
     assert " -N -B -e " in str(captured["command"][2])
+
+
+def test_provision_database_mysql_allow_existing_reasserts_user_and_grants(tmp_path: Path, monkeypatch) -> None:
+    credential_file = tmp_path / "demo.cnf"
+    password_file = tmp_path / "demo.txt"
+    sql_calls: list[str] = []
+    counts = iter([1, 1])
+
+    def fake_scalar_for_admin(*, admin_credential_file, sql):
+        _ = admin_credential_file
+        _ = sql
+        return next(counts)
+
+    def fake_run_command(command: list[str], check: bool = True):
+        _ = check
+        sql_calls.append(command[-1])
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("larops.services.db_service._ensure_db_provision_binaries", lambda **_kwargs: None)
+    monkeypatch.setattr("larops.services.db_service._mysql_scalar_for_admin", fake_scalar_for_admin)
+    monkeypatch.setattr("larops.services.db_service.run_command", fake_run_command)
+
+    result = provision_database(
+        engine="mysql",
+        database="demo_test",
+        user="demo_test",
+        password="secret-789",
+        app_host="127.0.0.1",
+        app_port=3306,
+        state_path=tmp_path / "state",
+        domain="demo.test",
+        credential_file=credential_file,
+        password_file=password_file,
+        allow_existing=True,
+    )
+
+    assert result["status"] == "adopted"
+    assert "ALTER USER" in sql_calls[0]
+    assert "GRANT ALL PRIVILEGES ON `demo_test`.*" in sql_calls[0]
+    assert "demo_test" in sql_calls[0]
+    assert "127.0.0.1" in sql_calls[0]
+    assert credential_file.exists()
+    assert password_file.read_text(encoding="utf-8").strip() == "secret-789"
 
 
 def test_build_backup_command_sets_restrictive_umask(tmp_path: Path) -> None:
