@@ -2,13 +2,16 @@ from pathlib import Path
 
 import pytest
 
+import larops.config as config_module
 from larops.config import ConfigError, load_config
 
 
 def test_load_config_defaults_when_missing(tmp_path: Path) -> None:
     config = load_config(tmp_path / "missing.yaml")
+    install_root = Path(config_module.__file__).resolve().parents[2]
     assert config.environment == "production"
-    assert config.events.path == ".larops/events.jsonl"
+    assert config.state_path == str((install_root / ".larops" / "state").resolve())
+    assert config.events.path == str((install_root / ".larops" / "events.jsonl").resolve())
 
 
 def test_load_config_reads_values(tmp_path: Path) -> None:
@@ -27,6 +30,27 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     config = load_config(file)
     assert config.environment == "staging"
     assert config.events.path == "/tmp/custom-events.jsonl"
+
+
+def test_load_config_resolves_relative_runtime_paths_independent_of_cwd(tmp_path: Path, monkeypatch) -> None:
+    file = tmp_path / "larops.yaml"
+    file.write_text(
+        "\n".join(
+            [
+                "state_path: .larops/custom-state",
+                "events:",
+                "  path: .larops/custom-events.jsonl",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(file)
+    install_root = Path(config_module.__file__).resolve().parents[2]
+
+    assert config.state_path == str((install_root / ".larops" / "custom-state").resolve())
+    assert config.events.path == str((install_root / ".larops" / "custom-events.jsonl").resolve())
 
 
 def test_load_config_reads_doctor_heartbeat_checks(tmp_path: Path) -> None:

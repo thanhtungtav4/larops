@@ -265,6 +265,8 @@ LarOps lưu metadata ở `state_path`, ví dụ:
 - `state/secrets/db/<domain>.cnf`: DB credentials
 - `state/security/...`: monitor state, FIM baseline
 
+Mặc định, nếu `state_path` hoặc `events.path` là đường dẫn tương đối thì LarOps sẽ resolve theo thư mục cài đặt LarOps, không theo thư mục hiện tại của shell. Bạn có thể chạy `larops` từ `~`, `/opt/larops`, hay chỗ khác mà vẫn dùng cùng một state tree.
+
 ### 3. Runtime là spec + unit
 
 Các process như `worker`, `scheduler`, `horizon` được biểu diễn bởi:

@@ -262,6 +262,8 @@ LarOps stores state metadata under `state_path`:
 - DB credentials (`state/secrets/db/<domain>.cnf`)
 - Event stream file (`events.path`)
 
+By default, relative `state_path` and `events.path` values are resolved against the LarOps install root, not the current shell working directory. Running `larops` from `~`, `/opt/larops`, or another directory should still use the same state tree.
+
 ### Runtime behavior
 
 Runtime processes are represented by JSON specs and optional systemd units:

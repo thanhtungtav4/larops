@@ -342,6 +342,25 @@ Manual artisan commands are still useful when:
 - you intentionally disabled or bypassed the normal create flow
 - your app requires additional project-specific setup commands
 
+## Why does LarOps behave differently when I run it from `~` versus `/opt/larops`?
+
+It should not.
+
+Current LarOps behavior:
+
+- relative `state_path` values are resolved against the LarOps install root
+- relative `events.path` values are resolved the same way
+
+That means app metadata, DB credential files, runtime specs, and the local events file should stay on the same state tree even if you invoke `larops` from a different shell directory.
+
+If an older host already created duplicate state under different working directories, normalize it by rerunning the command from the LarOps install directory after updating:
+
+```bash
+cd /opt/larops
+larops app info <domain>
+larops create site <domain> --force --apply
+```
+
 ## Laravel bootstrap fails with `Please provide a valid cache path`
 
 Symptom:

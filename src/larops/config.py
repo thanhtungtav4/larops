@@ -11,6 +11,17 @@ class ConfigError(RuntimeError):
     pass
 
 
+def _install_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_runtime_path(path_raw: str) -> str:
+    path = Path(path_raw).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str((_install_root() / path).resolve())
+
+
 class DeployConfig(BaseModel):
     releases_path: str = "/var/www"
     source_base_path: str = "/var/www/source"
@@ -174,7 +185,10 @@ def load_config(path: Path | None = None) -> AppConfig:
         raw = {}
 
     config = AppConfig.model_validate(raw)
-    return apply_env_overrides(config)
+    config = apply_env_overrides(config)
+    config.state_path = _resolve_runtime_path(config.state_path)
+    config.events.path = _resolve_runtime_path(config.events.path)
+    return config
 
 
 def apply_env_overrides(config: AppConfig) -> AppConfig:
